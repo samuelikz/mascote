@@ -43,12 +43,21 @@ def test_repetido_comeca_no_primeiro_dia_valido_da_regra():
 
 
 def test_saudacao_e_filtro_de_traducao():
-    from mascote.app import saudacao, sem_emoji, vale_traduzir
+    from mascote.app import ofertas, saudacao, sem_emoji
 
     assert saudacao(datetime(2026, 10, 28, 8), ["almoço às 12h"]) == "bom dia! ☀️ hoje tem: almoço às 12h"
     assert saudacao(datetime(2026, 10, 28, 20), []).startswith("boa noite!")
-    assert vale_traduzir("Could we move the meeting to Friday afternoon?")
-    assert not vale_traduzir("você pode mudar a reunião pra sexta?")
-    assert not vale_traduzir("https://github.com/samuelikz/mascote/releases")
-    assert not vale_traduzir("for (int i = 0; i < n; i++) { total += i; }")
+    assert ofertas("Could we move the meeting to Friday afternoon?") == ["traduzir"]
+    assert ofertas("você pode mudar a reunião pra sexta?") == []
+    assert ofertas("https://github.com/samuelikz/mascote/releases") == []
+    assert ofertas("for (int i = 0; i < n; i++) { total += i; }") == []
+    textao = "o projeto vai bem e a equipe entregou tudo no prazo, então agora " * 10
+    assert ofertas(textao) == ["resumir"]
+    assert ofertas("we shipped everything on time and the team is happy with it now " * 10) == ["traduzir", "resumir"]
     assert sem_emoji("eba! ✅ bora 🍔") == "eba!  bora"
+
+
+def test_resposta_pronta_nunca_passa_da_metade_do_contexto():
+    from mascote.app import parametros
+
+    assert parametros("resultado", 4096)[1] == 2048 and parametros("resultado", 8192)[1] == 4096

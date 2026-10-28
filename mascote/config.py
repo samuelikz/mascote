@@ -6,7 +6,7 @@ from pathlib import Path
 
 PADROES = {
     "canto": "inf_dir", "ultima_comida": None, "almoco": "12:00", "bom_dia": None,
-    "iniciativa": True, "voz": False, "area_transferencia": False, "cor": "verde", "acessorio": "nenhum",
+    "iniciativa": True, "voz": False, "area_transferencia": False, "explorar": True, "amizade": 0, "cor": "verde", "acessorio": "nenhum",
 }
 
 
@@ -50,7 +50,7 @@ def salvar(cfg: dict) -> None:
 
 
 # ---- preferências escolhidas no instalador (HKCU\Software\Mascote) ----
-PREFERENCIAS_PADRAO = {"Nome": "Mascote", "IA": "embutida", "ModeloOllama": "gemma2:9b"}
+PREFERENCIAS_PADRAO = {"Nome": "Mascote", "IA": "embutida", "ModeloOllama": "gemma2:9b", "Cerebro": "gemma2"}
 
 
 def _chave_registro() -> str:
@@ -74,6 +74,8 @@ def preferencias() -> dict:
         pass
     if prefs["IA"] not in ("embutida", "ollama"):
         prefs["IA"] = "embutida"
+    if prefs["Cerebro"] not in ("gemma2", "qwen35"):
+        prefs["Cerebro"] = "gemma2"
     return prefs
 
 

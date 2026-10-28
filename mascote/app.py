@@ -8,16 +8,16 @@ from PySide6.QtCore import QFileSystemWatcher, QLocale, QObject, QTimer, Signal
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QSystemTrayIcon
 
-from . import atualizar, claude, config, memoria
+from . import atualizar, claude, config, diario, explorar, memoria, prompts
 from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
-from .baixar import ia_instalada
-from .ia import ClienteOllama, PonteIA, criar_ia
-from .janelas import segundos_ocioso, tela_cheia
-from .pet import ACESSORIOS, CORES, Pet
+from .baixar import MODELOS, ia_instalada, modelo
+from .ia import ClienteOllama, PonteIA, criar_ia, sem_pensamento
+from .janelas import ATALHO, administrador, segundos_ocioso, tela_cheia
+from .pet import ACESSORIOS, CORES, Pet, canto_mais_proximo
 from .prompts import (
-    ESQUEMA_LEMBRETE, LIMITE, conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar,
-    mensagens_traduzir, parece_portugues, separar_memoria,
+    ESQUEMA_LEMBRETE, conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar,
+    mensagens_resumir, mensagens_traduzir, parece_portugues, separar_memoria,
 )
 
 DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
@@ -30,7 +30,38 @@ OPCOES = {  # liga/desliga do menu Ajustes: chave no config.json, rótulo
     "iniciativa": "Puxar conversa sozinho 💬",
     "voz": "Falar em voz alta 🔊",
     "area_transferencia": "Oferecer tradução do que eu copiar 📋",
+    "explorar": "Explorar a tela (sentar em janelas e ícones) 🐾",
 }
+FOLGA_EM_CIMA = 110  # espaço que o corpo precisa acima do lugar onde senta
+FOCO_MIN, PAUSA_MIN = 25, 5
+
+
+FALAS = {  # várias versões de cada frase, pra ele não soar repetido
+    "nhac": ["Nhac! 😋 o que eu faço com isso?", "hmm, gostoso! 😋 e agora?", "nham nham 😋 o que eu faço com isso?",
+             "chegou comida! 🍽️ o que eu faço?"],
+    "feito": ["eba! ✅", "boa! 🎉", "isso aí! ✅", "mandou bem! 💪"],
+    "guardei": ["guardei! 🧠", "anotado na cabecinha 🧠", "pode deixar, não esqueço 🧠"],
+    "adiar": ["tá bom, te chamo em 10 min ⏰", "beleza, daqui 10 min eu volto ⏰", "ok! mais 10 minutinhos ⏰"],
+    "lembrar": ["Nhac! 😋 vou te lembrar", "anotado! 📌 vou te lembrar", "pode deixar! 📌 te lembro"],
+    "carinho": ["hihi 🥰", "que gostoso 💕", "mais! mais! 🥰", "ronron… 💕"],
+}
+
+
+def fala(chave: str) -> str:
+    return random.choice(FALAS[chave])
+
+
+def ofertas(texto: str) -> list[str]:
+    """O que oferecer pro texto copiado: traduzir (frase em outra língua) e/ou resumir (textão). Código e link, nada."""
+    if not 20 <= len(texto) <= prompts.LIMITE or len(re.findall(r"[{};=<>]", texto)) > len(texto) / 100:
+        return []
+    palavras = len(re.findall(r"[A-Za-zÀ-ú]{2,}", texto))
+    acoes = []
+    if palavras >= 4 and "://" not in texto and not parece_portugues(texto):
+        acoes.append("traduzir")
+    if palavras >= 80:
+        acoes.append("resumir")
+    return acoes
 
 
 def escolher_fala_lembrete(l: Lembrete) -> str:
@@ -65,20 +96,16 @@ def descrever_quando(quando: datetime, regra: dict | None, agora: datetime) -> s
     return f"toda {', '.join(curtos[:-1])} e {curtos[-1]} às {h}"
 
 
-def parametros(tipo: str) -> tuple[float, int]:
-    """(temperatura, max_tokens): JSON e texto pronto pedem resposta firme; texto pronto precisa de espaço."""
-    return {"lembrar": (0.1, 256), "resultado": (0.3, 4096)}.get(tipo, (0.7, 512))
+def parametros(tipo: str, contexto: int = 8192) -> tuple[float, int]:
+    """(temperatura, max_tokens): JSON e texto pronto pedem resposta firme; texto pronto precisa de espaço
+    (metade do contexto: a outra metade é do texto de entrada)."""
+    return {"lembrar": (0.1, 256), "resultado": (0.3, min(4096, contexto // 2))}.get(tipo, (0.7, 512))
 
 
 def saudacao(agora: datetime, hoje: list[str]) -> str:
     oi = "bom dia! ☀️" if agora.hour < 12 else "boa tarde! 🌤️" if agora.hour < 18 else "boa noite! 🌙"
     return f"{oi} hoje tem: {', '.join(hoje)}" if hoje else f"{oi} nada marcado pra hoje, dia livre 😄"
 
-
-def vale_traduzir(texto: str) -> bool:
-    """Texto copiado que parece frase em outra língua (não link, não código, não português)."""
-    return (20 <= len(texto) <= LIMITE and "://" not in texto and len(re.findall(r"[A-Za-zÀ-ú]{2,}", texto)) >= 4
-            and not re.search(r"[{};=<>]", texto) and not parece_portugues(texto))
 
 
 def sem_emoji(texto: str) -> str:
@@ -104,6 +131,7 @@ class App(QObject):
         self.agenda = Agenda(config.pasta_dados() / "agenda.db")
         self.prefs = config.preferencias()  # nome e IA escolhidos no instalador
         self.servidor = criar_ia(self.prefs)
+        prompts.ajustar_contexto(self.servidor.contexto)
         self.ia = PonteIA(self.servidor)
         self.pet = Pet(self.cfg["canto"], self.cfg["cor"], self.cfg["acessorio"])
         self.balao = Balao()
@@ -133,6 +161,14 @@ class App(QObject):
         self.pet.clique_direito.connect(self.menu)
         self.pet.comeu.connect(self.comeu)
         self.pet.mudou_canto.connect(self.mudou_canto)
+        self.pet.carinho.connect(self.ganhou_carinho)
+        self.foco: tuple[str, float] | None = None  # ("foco" | "pausa", quando acaba em time.time())
+        self.fim_da_fase = QTimer(self, singleShot=True, timeout=self.acabou_fase)
+        self.pet.moveu.connect(lambda: self.balao.isVisible() and self.posicionar_balao())
+        self.pet.moldura = explorar.moldura
+        self.pet.janela_embaixo = lambda pe: explorar.janela_embaixo(pe, self.pet.width()) if self.cfg["explorar"] else None
+        self.pet.atalho.connect(self.atalho_comida)
+        self.ultimo_carinho = 0.0
         self.balao.escolheu.connect(self.escolheu)
         self.balao.enviou.connect(self.enviou)
         self.balao.apagar.connect(self.apagar)
@@ -153,11 +189,18 @@ class App(QObject):
         self.relogio.start()
         QTimer.singleShot(1500, self.checar)
         QTimer.singleShot(60_000, lambda: self.verificar_atualizacao(pedido=False))  # confere sozinho ao abrir
+        if administrador():
+            QTimer.singleShot(3000, lambda: self.dizer(
+                "tô rodando como administrador 😬 assim o Windows não me deixa receber texto arrastado. "
+                "me fecha e abre de novo pelo menu Iniciar?", ms=20000))
 
     # ---- fala ----
     def posicionar_balao(self) -> None:
         self.pet.parar_passeio()  # o balão gruda no canto: o pet volta pra lá antes
-        self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+        geo = self.pet.frameGeometry()
+        # longe de casa, o balão abre pro lado que tem espaço
+        canto = self.pet.canto if self.pet.em_casa() else canto_mais_proximo(geo.center(), self.pet.area())
+        self.balao.posicionar(geo, canto)
 
     def livre(self) -> bool:
         """Nada na tela esperando o usuário: dá pra puxar assunto ou passear."""
@@ -186,7 +229,7 @@ class App(QObject):
     def pedir(self, mensagens: list[dict], etiqueta: tuple) -> None:
         self.pendentes += 1
         self.pet.definir_estado("pensando")
-        temperatura, max_tokens = parametros(etiqueta[0])
+        temperatura, max_tokens = parametros(etiqueta[0], self.servidor.contexto)
         extra = {"esquema": ESQUEMA_LEMBRETE} if etiqueta[0] == "lembrar" else {"fluxo": True} if etiqueta[0] == "chat" else {}
         self.ia.pedir(mensagens, etiqueta, max_tokens=max_tokens, temperatura=temperatura, **extra)
 
@@ -200,9 +243,71 @@ class App(QObject):
     def _mostrar_lembrete(self, id: int | None) -> None:
         """Lembrete na tela deixa o pet chamando até ser respondido, mesmo depois de outras caretas."""
         self.lembrete_na_tela = id
-        self.pet.base = "parado" if id is None else "chamando"
-        if self.pet.estado in ("parado", "chamando"):
+        self._atualizar_base()
+
+    def _atualizar_base(self) -> None:
+        """Pra onde as caretas com tempo voltam: lembrete esperando > modo foco > parado."""
+        focado = self.foco is not None and self.foco[0] == "foco"
+        self.pet.base = "chamando" if self.lembrete_na_tela is not None else "foco" if focado else "parado"
+        if self.pet.estado in ("parado", "chamando", "foco"):
             self.pet.voltar()
+
+    def anotar(self, tipo: str) -> None:
+        """Conta no diário; se a amizade subiu de nível, comemora."""
+        subiu = diario.registrar(self.cfg, tipo, datetime.now().date())
+        config.salvar(self.cfg)
+        if subiu:
+            _, nome, _, _ = diario.nivel(self.cfg)
+            premios = [item for item, n in diario.PREMIOS.items() if n == diario.nivel(self.cfg)[0]]
+            extra = f" ganhei: {', '.join(premios)} 🎁 (Ajustes → Aparência)" if premios else ""
+            self.pet.coracoes_ate = time.time() + 3
+            self.pet.definir_estado("feliz", 3000)
+            QTimer.singleShot(2500, lambda: self.dizer(f"subimos de nível! agora somos {nome} 💕{extra}", ms=8000))
+
+    # ---- modo foco ----
+    def comecar_foco(self) -> None:
+        self._fase("foco", FOCO_MIN)
+        self.dizer(f"modo foco! 🍅 {FOCO_MIN} min, eu fico quietinho aqui", ms=3000)
+
+    def parar_foco(self) -> None:
+        self.foco = None
+        self.fim_da_fase.stop()
+        self._atualizar_base()
+        self.dizer("parei o foco 👍", ms=2500)
+
+    def _fase(self, fase: str, minutos: int) -> None:
+        self.foco = (fase, time.time() + minutos * 60)
+        self.fim_da_fase.start(minutos * 60_000)
+        self._atualizar_base()
+        if fase == "foco":
+            self.pet.parar_passeio()
+            if not self.pet.em_casa() and self.pet.viagem is None:
+                self.pet.voltar_pra_casa()
+
+    def acabou_fase(self) -> None:
+        fase = self.foco[0] if self.foco else None
+        if fase == "foco":
+            self.anotar("focos")
+            self._fase("pausa", PAUSA_MIN)
+            self.pet.definir_estado("feliz", 3000)
+            self.dizer(f"foco concluído! 🍅🎉 agora {PAUSA_MIN} min de pausa: levanta, bebe água, alonga 🧘",
+                       [("pular pausa ⏭️", ("foco", "comecar")), ("parar ⏹️", ("foco", "parar"))], ms=None)
+        elif fase == "pausa":
+            self.foco = None
+            self._atualizar_base()
+            self.pet.definir_estado("chamando", 2000)
+            self.dizer("acabou a pausa! mais um foco? 🍅",
+                       [("bora 🍅", ("foco", "comecar")), ("chega por hoje", ("foco", "parar"))], ms=None)
+
+    def minutos_restantes(self) -> int:
+        return max(0, round((self.foco[1] - time.time()) / 60)) if self.foco else 0
+
+    def ver_semana(self) -> None:
+        hoje = datetime.now().date()
+        _, nome, _, falta = diario.nivel(self.cfg)
+        proximo = f"faltam {falta} pontos pro próximo nível" if falta else "nível máximo! 👑"
+        self.dizer(f"nossa semana 📊\n{diario.descrever_semana(diario.semana(self.cfg, hoje))}\n\n"
+                   f"somos {nome} 💕 ({self.cfg.get('amizade', 0)} pontos; {proximo})", ms=15000)
 
     def balao_fechou(self) -> None:
         self.esperando_quando = ""  # fechou o chat: desistiu do "pra quando?"
@@ -239,10 +344,39 @@ class App(QObject):
                 self.pet.definir_estado(novo)
         if ocioso > PARADA_S:
             self.ativo_desde = time.time()
+        if self.bandeja:
+            self.bandeja.setToolTip(f"{self.prefs['Nome']}" + (
+                f" · {self.foco[0]}: faltam {self.minutos_restantes()} min" if self.foco else ""))
+        if self.foco is not None and self.foco[0] == "foco":
+            return  # focado: não puxa assunto, não passeia, não explora
         if self.cfg["iniciativa"] and self.livre():
             self.puxar_assunto(agora)
-        if self.livre() and self.pet.estado == "parado" and random.random() < 0.12:
-            self.pet.passear()  # de vez em quando dá uma voltinha pela borda (~a cada 3 min)
+        parado_de_vez = self.pet.viagem is None and self.pet.passeio is None
+        if self.livre() and self.pet.estado == "parado" and parado_de_vez:
+            if self.cfg["explorar"] and random.random() < 0.18:
+                self.explorar()  # ~a cada 2 min muda de lugar
+            elif random.random() < 0.12:
+                self.pet.passear()  # de vez em quando dá uma voltinha pela borda (~a cada 3 min)
+        if not self.cfg["explorar"] and parado_de_vez and not self.pet.em_casa():
+            self.pet.voltar_pra_casa()
+
+    def explorar(self) -> None:
+        if not self.pet.em_casa() and random.random() < 0.3:
+            self.pet.voltar_pra_casa()
+            return
+        try:
+            opcoes = explorar.lugares(self.pet.width(), self.pet.area(), FOLGA_EM_CIMA)
+        except OSError:
+            opcoes = []
+        if not opcoes:
+            if not self.pet.em_casa():
+                self.pet.voltar_pra_casa()
+            return
+        chao, hwnd = random.choice(opcoes)
+        janela = explorar.moldura(hwnd) if hwnd else None
+        if hwnd and janela is None:
+            return  # a janela fechou bem agora
+        self.pet.ir_para(chao, sentar_em=(hwnd, chao.x() - janela.left()) if hwnd else None)
 
     def puxar_assunto(self, agora: datetime) -> None:
         if self.cfg["bom_dia"] != agora.date().isoformat():
@@ -251,7 +385,11 @@ class App(QObject):
             hoje = [("almoço" if l.texto == "ALMOCO" else l.texto) + f" às {_hora(l.proximo)}"
                     for l in self.agenda.listar() if l.proximo.date() == agora.date() and l.proximo > agora]
             self.pet.definir_estado("feliz", 2000)
-            self.dizer(saudacao(agora, hoje), ms=10000)
+            texto = saudacao(agora, hoje)
+            passada = diario.semana(self.cfg, agora.date() - timedelta(days=1))
+            if agora.weekday() == 0 and any(passada.values()):  # segunda: resumo da semana que passou
+                texto += f"\nsemana passada: {diario.descrever_semana(passada)}"
+            self.dizer(texto, ms=12000)
         elif time.time() - self.ativo_desde > PAUSA_S:
             self.ativo_desde = time.time()
             self.pet.definir_estado("chamando", 2000)
@@ -260,12 +398,36 @@ class App(QObject):
     # ---- área de transferência ----
     def copiou(self) -> None:
         texto = QGuiApplication.clipboard().text().strip()
-        if not self.cfg["area_transferencia"] or texto == self.balao.copiado or not self.livre() or not vale_traduzir(texto):
+        if not self.cfg["area_transferencia"] or texto == self.balao.copiado or not self.livre():
+            return
+        acoes = ofertas(texto)
+        if not acoes:
             return
         self.comida = texto
-        self.dizer("copiou um texto em outra língua 👀 quer que eu traduza?",
-                   [("traduzir 🌎", ("comida", "traduzir")), ("agora não", ("nada", None))])
+        pergunta = {("traduzir",): "copiou um texto em outra língua 👀 quer que eu traduza?",
+                    ("resumir",): "copiou um textão 📄 quer que eu resuma?",
+                    ("traduzir", "resumir"): "copiou um textão em outra língua 👀 traduzo ou resumo?"}[tuple(acoes)]
+        botoes = {"traduzir": ("traduzir 🌎", ("comida", "traduzir")), "resumir": ("resumir 📝", ("comida", "resumir"))}
+        self.dizer(pergunta, [botoes[a] for a in acoes] + [("agora não", ("nada", None))])
         self.balao.sumir.start(10000)  # pergunta com botão, mas não fica pra sempre
+
+    def atalho_comida(self) -> None:
+        texto = QGuiApplication.clipboard().text().strip()
+        self.escondido = False
+        if not self.pet.isVisible() and not tela_cheia():
+            self.pet.show()
+        if texto:
+            self.comeu(texto)
+        else:
+            self.pet.definir_estado("triste", 2000)
+            self.dizer(f"copia um texto e aperta {ATALHO} que eu como 😋", ms=4000)
+
+    def ganhou_carinho(self) -> None:
+        if time.time() - self.ultimo_carinho > 20:  # conta no máximo um carinho a cada 20 s
+            self.ultimo_carinho = time.time()
+            self.anotar("carinhos")
+            if not self.balao.isVisible():
+                self.dizer(fala("carinho"), ms=2500)
 
     # ---- Claude Code ----
     def evento_claude(self, caminho: str) -> None:
@@ -291,13 +453,14 @@ class App(QObject):
     # ---- comida ----
     def comeu(self, texto: str) -> None:
         self.comida = texto
+        self.anotar("comidas")
         self.cfg["ultima_comida"] = datetime.now().isoformat()
         config.salvar(self.cfg)
         self.pet.definir_estado("feliz", 1500)
-        self.dizer("Nhac! 😋 o que eu faço com isso?", [
+        self.dizer(fala("nhac"), [
             ("lembrar 📌", ("comida", "lembrar")), ("guardar 🧠", ("comida", "guardar")),
             ("melhorar ✨", ("comida", "melhorar")), ("traduzir 🌎", ("comida", "traduzir")),
-            ("engolir 😋", ("comida", "engolir")),
+            ("resumir 📝", ("comida", "resumir")), ("engolir 😋", ("comida", "engolir")),
         ])
 
     def escolheu(self, valor: tuple) -> None:
@@ -309,7 +472,7 @@ class App(QObject):
             from .baixar_ui import baixar_com_janela
 
             self.balao.fechar()
-            if baixar_com_janela(self.prefs["Nome"]):
+            if baixar_com_janela(self.prefs["Nome"], self.prefs["Cerebro"]):
                 self.pet.definir_estado("feliz", 2000)
                 self.dizer("cérebro instalado! 🧠✨ agora sim, fala comigo")
         elif tipo == "atualizar":
@@ -318,15 +481,19 @@ class App(QObject):
             self.balao.fechar()
             if atualizar_com_janela(self.prefs["Nome"], dado):
                 self.dizer("instalando a atualização… já volto! 🔄", ms=None)
+        elif tipo == "foco":
+            self.balao.fechar()
+            self.comecar_foco() if dado == "comecar" else self.parar_foco()
         elif tipo == "feito":
             self.agenda.feito(dado, agora)
             self._mostrar_lembrete(None)
+            self.anotar("lembretes")
             self.pet.definir_estado("feliz", 2000)
-            self.dizer("eba! ✅")
+            self.dizer(fala("feito"))
         elif tipo == "adiar":
             self.agenda.adiar(dado, agora)
             self._mostrar_lembrete(None)
-            self.dizer("tá bom, te chamo em 10 min ⏰", ms=3000)
+            self.dizer(fala("adiar"), ms=3000)
         elif dado == "lembrar":
             self.pedir(mensagens_extrair(self.comida, agora), ("lembrar", self.comida))
         elif dado == "engolir":  # só comer, sem guardar nada
@@ -335,11 +502,13 @@ class App(QObject):
         elif dado == "guardar":
             memoria.adicionar(self.comida.strip()[:LIMITE_MEMORIA])
             self.pet.definir_estado("feliz", 2000)
-            self.dizer("guardei! 🧠")
+            self.dizer(fala("guardei"))
         elif dado == "melhorar":
             self.pedir(mensagens_melhorar(self.comida), ("resultado",))
         elif dado == "traduzir":
             self.pedir(mensagens_traduzir(self.comida), ("resultado",))
+        elif dado == "resumir":
+            self.pedir(mensagens_resumir(self.comida), ("resultado",))
 
     # ---- chat ----
     def abrir_chat(self) -> None:
@@ -357,13 +526,15 @@ class App(QObject):
             self.pedir(mensagens_extrair(texto, agora), ("lembrar", texto))
         else:
             self.historico.append({"role": "user", "content": texto})
+            self.anotar("conversas")
             fatos = [m["fato"] for m in memoria.listar()]
-            self.pedir(mensagens_chat(self.historico, fatos, agora, self.prefs["Nome"]), ("chat",))
+            tom = diario.nivel(self.cfg)[2]
+            self.pedir(mensagens_chat(self.historico, fatos, agora, self.prefs["Nome"], tom), ("chat",))
 
     # ---- respostas da IA ----
     def ia_escrevendo(self, parcial: str, etiqueta: tuple) -> None:
         if etiqueta[0] == "chat" and self.balao.modo == "chat" and self.balao.isVisible():
-            visivel = re.split(r"(?im)^\s*MEMORIA:", parcial)[0].strip()  # a linha de memória não aparece nem pela metade
+            visivel = re.split(r"(?im)^\s*MEMORIA:", sem_pensamento(parcial))[0].strip()  # nem memória nem raciocínio aparecem
             if visivel:
                 self.balao.escrever_rascunho(visivel)
 
@@ -409,7 +580,7 @@ class App(QObject):
             return
         self.agenda.adicionar(texto, quando, regra)
         self.pet.definir_estado("feliz", 2000)
-        self.dizer(f"Nhac! 😋 vou te lembrar {descrever_quando(quando, regra, agora)}")
+        self.dizer(f"{fala('lembrar')} {descrever_quando(quando, regra, agora)}")
 
     def ia_falhou(self, erro: str, etiqueta: tuple) -> None:
         print("IA falhou:", erro)
@@ -418,7 +589,9 @@ class App(QObject):
         if isinstance(self.servidor, ClienteOllama):
             self.dizer(f"não tô achando o Ollama 🦙 ele tá aberto? ({self.prefs['ModeloOllama']})")
         elif not ia_instalada():
-            self.dizer("meu cérebro ainda não foi baixado 🧠 (5,4 GB)", [("baixar agora ⬇️", ("baixar", None)), ("depois", ("nada", None))])
+            m = modelo(self.prefs["Cerebro"])
+            self.dizer(f"meu cérebro ainda não foi baixado 🧠 ({m.nome}, {m.gb})",
+                       [("baixar agora ⬇️", ("baixar", None)), ("depois", ("nada", None))])
         else:
             self.dizer("ai, minha cabecinha falhou 😵 tenta de novo?")
 
@@ -427,9 +600,17 @@ class App(QObject):
         lembretes, memorias = len(self.agenda.listar()), len(memoria.listar())
         m = QMenu()
         m.addAction("Conversar 💬", self.abrir_chat)
+        dica = m.addAction(f"{ATALHO}: me dá o que você copiou 😋" if self.pet.atalho_ok
+                           else f"({ATALHO} está ocupado por outro programa)")
+        dica.setEnabled(False)
         if self.historico:
             m.addAction("Começar conversa nova 🧹", self.conversa_nova)
         m.addSeparator()
+        if self.foco:
+            m.addAction(f"Parar o {self.foco[0]} ⏹️ (faltam {self.minutos_restantes()} min)", self.parar_foco)
+        else:
+            m.addAction(f"Modo foco 🍅 ({FOCO_MIN} min)", self.comecar_foco)
+        m.addAction(f"Nossa semana 📊 (somos {diario.nivel(self.cfg)[1]})", self.ver_semana)
         m.addAction(f"Ver lembretes ⏰ ({lembretes})", self.ver_lembretes)
         m.addAction(f"O que eu lembro de você 🧠 ({memorias})", self.ver_memorias)
         m.addSeparator()
@@ -438,15 +619,16 @@ class App(QObject):
         ajustes.addAction(f"Meu nome ({self.prefs['Nome']})…", self.mudar_nome)
         ajustes.addAction("Modelo da IA…", self.escolher_ia)
         visual = ajustes.addMenu("Aparência 🎨")
-        for cor in CORES:
-            a = visual.addAction(f"cor {cor}", lambda c=cor: self.vestir(cor=c))
-            a.setCheckable(True)
-            a.setChecked(cor == self.cfg["cor"])
-        visual.addSeparator()
-        for item in ACESSORIOS:
-            a = visual.addAction(item, lambda i=item: self.vestir(acessorio=i))
-            a.setCheckable(True)
-            a.setChecked(item == self.cfg["acessorio"])
+        for opcoes, chave, rotulo in ((CORES, "cor", "cor {}"), (ACESSORIOS, "acessorio", "{}")):
+            for item in opcoes:
+                if diario.liberado(self.cfg, item):
+                    a = visual.addAction(rotulo.format(item), lambda c=chave, i=item: self.vestir(**{c: i}))
+                    a.setCheckable(True)
+                    a.setChecked(item == self.cfg[chave])
+                else:
+                    nome = diario.NIVEIS[diario.PREMIOS[item]][1]
+                    visual.addAction(f"🔒 {rotulo.format(item)} (quando formos {nome})").setEnabled(False)
+            visual.addSeparator()
         ajustes.addSeparator()
         for chave, rotulo in OPCOES.items():
             a = ajustes.addAction(rotulo, lambda c=chave: self.alternar(c))
@@ -556,26 +738,38 @@ class App(QObject):
             self.dizer(f"agora eu sou o {self.prefs['Nome']}! 😄")
 
     def escolher_ia(self) -> None:
-        embutida = "IA embutida (Gemma 2 9B)"
+        jeito = {"gemma2": "caprichada", "qwen35": "leve"}
+        embutidas = {f"IA embutida: {m.nome} ({m.gb}, {jeito[c]}{'' if ia_instalada(c) else ', precisa baixar'})": c
+                     for c, m in MODELOS.items()}
         try:
             do_ollama = [f"Ollama: {m}" for m in ClienteOllama(self.prefs["ModeloOllama"]).modelos()]
         except Exception:
             do_ollama = []
-        opcoes = [embutida] + do_ollama
-        atual = embutida if self.prefs["IA"] == "embutida" else f"Ollama: {self.prefs['ModeloOllama']}"
+        opcoes = list(embutidas) + do_ollama
+        if self.prefs["IA"] == "embutida":
+            atual = next(r for r, c in embutidas.items() if c == self.prefs["Cerebro"])
+        else:
+            atual = f"Ollama: {self.prefs['ModeloOllama']}"
         escolha, ok = QInputDialog.getItem(None, self.prefs["Nome"], "Qual cérebro eu uso?" + (
             "" if do_ollama else "\n(não achei o Ollama aberto)"), opcoes, opcoes.index(atual) if atual in opcoes else 0, False)
         if not ok:
             return
-        if escolha == embutida:
-            self.prefs["IA"] = "embutida"
+        if escolha in embutidas:
+            self.prefs["IA"], self.prefs["Cerebro"] = "embutida", embutidas[escolha]
+            config.salvar_preferencia("Cerebro", self.prefs["Cerebro"])
         else:
             self.prefs["IA"], self.prefs["ModeloOllama"] = "ollama", escolha.removeprefix("Ollama: ")
             config.salvar_preferencia("ModeloOllama", self.prefs["ModeloOllama"])
         config.salvar_preferencia("IA", self.prefs["IA"])
         self.servidor.desligar()
         self.servidor = self.ia.servidor = criar_ia(self.prefs)
-        self.dizer("pronto, troquei de cérebro! 🧠")
+        prompts.ajustar_contexto(self.servidor.contexto)
+        if self.prefs["IA"] == "embutida" and not ia_instalada(self.prefs["Cerebro"]):
+            m = modelo(self.prefs["Cerebro"])
+            self.dizer(f"troquei! mas o {m.nome} ainda não foi baixado ({m.gb}) 🧠",
+                       [("baixar agora ⬇️", ("baixar", None)), ("depois", ("nada", None))], ms=None)
+        else:
+            self.dizer("pronto, troquei de cérebro! 🧠")
 
     # ---- atualizações ----
     def verificar_atualizacao(self, pedido: bool = True) -> None:

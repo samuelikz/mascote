@@ -128,14 +128,11 @@ def test_obter_ia_baixa_os_dois_com_um_progresso_so(tmp_path, servidor, monkeypa
     monkeypatch.setattr(baixar, "LLAMA_FONTES", [[(base + "/llama.zip", len(pacote.getvalue()))]])
     monkeypatch.setattr(baixar, "LLAMA_TAMANHO", len(pacote.getvalue()))
     monkeypatch.setattr(baixar, "LLAMA_SHA256", hashlib.sha256(pacote.getvalue()).hexdigest())
-    monkeypatch.setattr(baixar, "MODELO_FONTES", [partes])
-    monkeypatch.setattr(baixar, "MODELO_TAMANHO", len(CONTEUDO))
-    monkeypatch.setattr(baixar, "MODELO_SHA256", SHA)
-    monkeypatch.setattr(baixar, "BLOB_OLLAMA", tmp_path / "sem-ollama")
+    monkeypatch.setitem(baixar.MODELOS, "qwen35", baixar.Modelo("t", "t.gguf", SHA, len(CONTEUDO), [partes]))
     progresso = []
-    baixar.obter_ia(lambda f, t: progresso.append((f, t)))
+    baixar.obter_ia(lambda f, t: progresso.append((f, t)), chave="qwen35")
     total = len(pacote.getvalue()) + len(CONTEUDO)
-    assert baixar.ia_instalada()
+    assert baixar.ia_instalada("qwen35") and not baixar.ia_instalada("gemma2")
     assert progresso[-1] == (total, total) and all(t == total for _, t in progresso)
     assert [f for f, _ in progresso] == sorted(f for f, _ in progresso)
     assert sorted(p.name for p in (tmp_path / "llama").iterdir()) == ["llama-server.exe", "llama-server.exe.ok"]

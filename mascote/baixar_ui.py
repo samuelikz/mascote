@@ -4,7 +4,7 @@ import threading
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
-from .baixar import ErroDownload, obter_ia
+from .baixar import ErroDownload, modelo, obter_ia
 
 MB = 1024 * 1024
 
@@ -14,8 +14,9 @@ class _Ponte(QObject):
     acabou = Signal(str)  # "" = deu certo, senão a mensagem de erro
 
 
-def baixar_com_janela(nome: str) -> bool:
-    janela = QProgressDialog(f"Baixando o cérebro do {nome} (Gemma 2 9B, 5,4 GB)…", "Cancelar", 0, 1000)
+def baixar_com_janela(nome: str, chave: str | None = None) -> bool:
+    m = modelo(chave)
+    janela = QProgressDialog(f"Baixando o cérebro do {nome} ({m.nome}, {m.gb})…", "Cancelar", 0, 1000)
     janela.setWindowTitle(nome)
     janela.setWindowModality(Qt.ApplicationModal)
     janela.setMinimumWidth(420)
@@ -38,7 +39,7 @@ def baixar_com_janela(nome: str) -> bool:
 
     def trabalho():
         try:
-            obter_ia(ponte.andou.emit, cancelado=cancelar.is_set)
+            obter_ia(ponte.andou.emit, cancelado=cancelar.is_set, chave=chave)
             ponte.acabou.emit("")
         except (ErroDownload, OSError) as e:
             ponte.acabou.emit(str(e) or "falhou")

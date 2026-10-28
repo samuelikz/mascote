@@ -4,6 +4,25 @@ ctypes.windll.kernel32.GetTickCount64.restype = ctypes.c_ulonglong
 from ctypes import wintypes
 
 QUNS_TELA_CHEIA = {2, 3, 4}  # BUSY, RUNNING_D3D_FULL_SCREEN, PRESENTATION_MODE
+WM_HOTKEY = 0x0312
+ATALHO = "Ctrl+Alt+M"
+_MOD_ALT, _MOD_CONTROL, _MOD_NOREPEAT = 0x1, 0x2, 0x4000
+
+
+def registrar_atalho(hwnd: int) -> bool:
+    """Ctrl+Alt+M em qualquer programa vira WM_HOTKEY nesta janela. False se outro programa já usa o atalho."""
+    try:
+        return bool(ctypes.windll.user32.RegisterHotKey(
+            ctypes.c_void_p(hwnd), 1, _MOD_ALT | _MOD_CONTROL | _MOD_NOREPEAT, ord("M")))
+    except (OSError, AttributeError):
+        return False
+
+
+def administrador() -> bool:
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (OSError, AttributeError):
+        return False
 
 
 class _LASTINPUTINFO(ctypes.Structure):

@@ -54,15 +54,18 @@ Name: "{userstartup}\{#Produto}"; Filename: "{app}\Mascote.exe"; Check: IniciarM
 Root: HKCU; Subkey: "Software\{#Chave}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\{#Chave}"; ValueType: string; ValueName: "Nome"; ValueData: "{code:Nome}"
 Root: HKCU; Subkey: "Software\{#Chave}"; ValueType: string; ValueName: "IA"; ValueData: "{code:ModoIA}"
+Root: HKCU; Subkey: "Software\{#Chave}"; ValueType: string; ValueName: "Cerebro"; ValueData: "{code:Cerebro}"
 Root: HKCU; Subkey: "Software\{#Chave}"; ValueType: string; ValueName: "ModeloOllama"; ValueData: "{code:ModeloOllama}"
 Root: HKCU; Subkey: "Software\{#Chave}"; ValueType: string; ValueName: "Iniciar"; ValueData: "{code:Iniciar}"
 
 [Run]
 ; baixa (ou copia do Ollama) o modelo; se falhar, o pet oferece depois
 Filename: "{app}\Mascote.exe"; Parameters: "--baixar-modelo"; StatusMsg: "Baixando a IA..."; Flags: runasoriginaluser waituntilterminated; Check: IAEmbutida and not WizardSilent
-Filename: "{app}\Mascote.exe"; Description: "Abrir o {#Produto} agora"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; o pet abre pelo explorer.exe, que roda como usuário comum: assim ele nunca herda o administrador do instalador
+; (pet de administrador não recebe texto arrastado nem avisos de outros programas)
+Filename: "{win}\explorer.exe"; Parameters: """{app}\Mascote.exe"""; Description: "Abrir o {#Produto} agora"; Flags: nowait postinstall skipifsilent
 ; atualização pelo próprio pet (modo silencioso): reabre sozinho no fim
-Filename: "{app}\Mascote.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent
+Filename: "{win}\explorer.exe"; Parameters: """{app}\Mascote.exe"""; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Mascote.exe /T"; Flags: runhidden; RunOnceId: "fechar"
@@ -80,7 +83,7 @@ var
   PaginaManutencao: TInputOptionWizardPage;
   PaginaNome: TInputQueryWizardPage;
   PaginaIA: TWizardPage;
-  OpEmbutida, OpOllama: TNewRadioButton;
+  OpEmbutida, OpLeve, OpOllama: TNewRadioButton;
   EdModelo: TNewEdit;
   CkIniciar: TNewCheckBox;
   Instalado, Fechando: Boolean;
@@ -101,6 +104,11 @@ begin
   if OpOllama.Checked then Result := 'ollama' else Result := 'embutida';
 end;
 
+function Cerebro(Param: String): String;
+begin
+  if OpLeve.Checked then Result := 'qwen35' else Result := 'gemma2';
+end;
+
 function ModeloOllama(Param: String): String;
 begin
   Result := Trim(EdModelo.Text);
@@ -118,7 +126,7 @@ end;
 
 function IAEmbutida: Boolean;
 begin
-  Result := OpEmbutida.Checked;
+  Result := OpEmbutida.Checked or OpLeve.Checked;
 end;
 
 function InitializeSetup: Boolean;
@@ -162,7 +170,7 @@ begin
   OpEmbutida := TNewRadioButton.Create(PaginaIA);
   OpEmbutida.Parent := PaginaIA.Surface;
   OpEmbutida.Width := PaginaIA.SurfaceWidth;
-  OpEmbutida.Caption := 'IA embutida (Gemma 2 9B)';
+  OpEmbutida.Caption := 'IA embutida caprichada (Gemma 2 9B)';
   OpEmbutida.OnClick := @TrocouIA;
   with TNewStaticText.Create(PaginaIA) do begin
     Parent := PaginaIA.Surface;
@@ -171,16 +179,29 @@ begin
     Caption := 'Baixa 5,5 GB do GitHub do projeto durante a instalação (ou copia do Ollama, se já estiver lá).';
   end;
 
+  OpLeve := TNewRadioButton.Create(PaginaIA);
+  OpLeve.Parent := PaginaIA.Surface;
+  OpLeve.Top := ScaleY(44);
+  OpLeve.Width := PaginaIA.SurfaceWidth;
+  OpLeve.Caption := 'IA embutida leve (Qwen3.5 4B)';
+  OpLeve.OnClick := @TrocouIA;
+  with TNewStaticText.Create(PaginaIA) do begin
+    Parent := PaginaIA.Surface;
+    Top := ScaleY(62);
+    Left := ScaleX(18);
+    Caption := 'Baixa 3,0 GB. Mais rápida e roda em placas de vídeo mais simples; conversa um pouco menos caprichada.';
+  end;
+
   OpOllama := TNewRadioButton.Create(PaginaIA);
   OpOllama.Parent := PaginaIA.Surface;
-  OpOllama.Top := ScaleY(44);
+  OpOllama.Top := ScaleY(88);
   OpOllama.Width := PaginaIA.SurfaceWidth;
   OpOllama.Caption := 'Usar o Ollama já instalado neste PC (não baixa nada).';
   OpOllama.OnClick := @TrocouIA;
 
   EdModelo := TNewEdit.Create(PaginaIA);
   EdModelo.Parent := PaginaIA.Surface;
-  EdModelo.Top := ScaleY(70);
+  EdModelo.Top := ScaleY(114);
   EdModelo.Left := ScaleX(18);
   EdModelo.Width := ScaleX(200);
   EdModelo.MaxLength := 80;
@@ -188,13 +209,14 @@ begin
 
   CkIniciar := TNewCheckBox.Create(PaginaIA);
   CkIniciar.Parent := PaginaIA.Surface;
-  CkIniciar.Top := ScaleY(115);
+  CkIniciar.Top := ScaleY(159);
   CkIniciar.Width := PaginaIA.SurfaceWidth;
   CkIniciar.Caption := 'Iniciar o mascote junto com o Windows';
   CkIniciar.Checked := LerPref('Iniciar', '1') = '1';
 
   OpOllama.Checked := LerPref('IA', 'embutida') = 'ollama';
-  OpEmbutida.Checked := not OpOllama.Checked;
+  OpLeve.Checked := not OpOllama.Checked and (LerPref('Cerebro', 'gemma2') = 'qwen35');
+  OpEmbutida.Checked := not OpOllama.Checked and not OpLeve.Checked;
   TrocouIA(nil);
 end;
 

@@ -34,11 +34,11 @@ def test_gravacao_interrompida_nao_estraga_o_arquivo(monkeypatch):  # revisão #
 
 
 def test_preferencias_do_instalador_com_padroes():
-    assert config.preferencias() == {"Nome": "Mascote", "IA": "embutida", "ModeloOllama": "gemma2:9b"}
+    assert config.preferencias() == {"Nome": "Mascote", "IA": "embutida", "ModeloOllama": "gemma2:9b", "Cerebro": "gemma2"}
     config.salvar_preferencia("Nome", "Bolinha")
     config.salvar_preferencia("IA", "ollama")
     config.salvar_preferencia("ModeloOllama", "  ")
-    assert config.preferencias() == {"Nome": "Bolinha", "IA": "ollama", "ModeloOllama": "gemma2:9b"}
+    assert config.preferencias() == {"Nome": "Bolinha", "IA": "ollama", "ModeloOllama": "gemma2:9b", "Cerebro": "gemma2"}
 
 
 def test_ia_desconhecida_vira_embutida():

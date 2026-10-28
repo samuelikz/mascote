@@ -107,3 +107,16 @@ def test_memorias_relevantes_vem_primeiro_e_cabem_no_limite():
     assert "O usuário trabalha com Python" in escolhidas
     assert sum(map(len, escolhidas)) <= 300
     assert escolher_memorias(["a", "b"], "") == ["a", "b"]  # ordem original
+
+
+def test_limites_seguem_o_contexto_do_cerebro():
+    from mascote import prompts
+
+    try:
+        prompts.ajustar_contexto(4096)  # a Gemma na GPU
+        hist = [{"role": "user" if i % 2 == 0 else "assistant", "content": "a" * 6000} for i in range(11)]
+        msgs = prompts.mensagens_chat(hist, ["m" * 100] * 40, AGORA)
+        assert sum(len(m["content"]) for m in msgs) <= 12000  # ~3300 tokens + resposta de 512 < 4096
+        assert len(prompts.mensagens_melhorar("a" * 50_000)[-1]["content"]) < 6000
+    finally:
+        prompts.ajustar_contexto(8192)

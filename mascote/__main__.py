@@ -18,7 +18,8 @@ def main() -> int:
         from .config import preferencias
 
         app = QApplication(sys.argv)
-        return 0 if baixar_com_janela(preferencias()["Nome"]) else 1
+        prefs = preferencias()
+        return 0 if baixar_com_janela(prefs["Nome"], prefs["Cerebro"]) else 1
     trava = QLockFile(str(pasta_dados() / "mascote.lock"))
     if not trava.tryLock(100):
         return 0  # já tem um Mascote rodando

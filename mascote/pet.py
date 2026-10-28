@@ -1,19 +1,22 @@
 import math
 import random
 import time
+from ctypes import wintypes
 from typing import Literal
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
-Estado = Literal["parado", "pulo", "cochilo", "boca", "pensando", "feliz", "triste", "fome", "chamando"]
+from .janelas import WM_HOTKEY, registrar_atalho
+
+Estado = Literal["parado", "pulo", "cochilo", "boca", "pensando", "feliz", "triste", "fome", "chamando", "foco"]
 
 CORES = {  # nome: (corpo, borda)
     "verde": ("#8fd3a8", "#5fae7c"), "azul": ("#9cc9f5", "#6a9fd6"), "rosa": ("#f5b3cf", "#d6809f"),
-    "amarelo": ("#f7dc8a", "#d4b14e"), "roxo": ("#c7b3f2", "#9b84d1"),
+    "amarelo": ("#f7dc8a", "#d4b14e"), "roxo": ("#c7b3f2", "#9b84d1"), "dourado": ("#ffd75e", "#c99a1c"),
 }
-ACESSORIOS = ["nenhum", "chapéu", "laço", "óculos"]
+ACESSORIOS = ["nenhum", "chapéu", "laço", "óculos", "cachecol", "coroa"]
 PASSEIO_S = 6.0
 TINTA = QColor("#234")
 LARGURA, ALTURA = 80, 66  # corpo
@@ -47,6 +50,9 @@ class Pet(QWidget):
     clique_direito = Signal(QPoint)
     comeu = Signal(str)
     mudou_canto = Signal(str)
+    carinho = Signal()
+    moveu = Signal()  # saiu do lugar sem ser arrastado (seguindo a janela onde senta, ou chegou num lugar novo)
+    atalho = Signal()  # Ctrl+Alt+M apertado em qualquer programa
 
     def __init__(self, canto: str = "inf_dir", cor: str = "verde", acessorio: str = "nenhum"):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
@@ -66,6 +72,17 @@ class Pet(QWidget):
         self.arraste: QPoint | None = None
         self.arrastou = False
         self.passeio: tuple[float, float] | None = None  # (início, distância): vai e volta pela borda da tela
+        self.carinho_x: float | None = None  # carinho = mouse indo e voltando em cima dele
+        self.carinho_lado = 0
+        self.carinho_viradas: list[float] = []
+        self.coracoes_ate = 0.0
+        self.atalho_ok = False
+        # exploração: viagem = (início, origem, destino, duração, altura do arco, onde senta ao chegar)
+        self.viagem: tuple | None = None
+        self.sentado: tuple[int, int] | None = None  # (janela, distância da borda esquerda dela)
+        self.moldura = lambda hwnd: None  # o app diz onde está cada janela (ou None se sumiu)
+        self.janela_embaixo = lambda ponto: None  # o app diz se tem janela pra sentar onde ele foi solto
+        self.ultimo_seguir = 0.0
         self.vestir(cor, acessorio)
         self.encaixar()
         self.relogio = QTimer(self, interval=33, timeout=self.passo)
@@ -92,8 +109,69 @@ class Pet(QWidget):
         if visivel:
             self.show()  # mudar a flag esconde a janela
 
+    def em_casa(self) -> bool:
+        return self.viagem is None and self.sentado is None and self.pos() == posicao_do_canto(self.canto, self.area(), self.size())
+
+    def ir_para(self, chao: QPoint, sentar_em: tuple[int, int] | None = None, arco: float | None = None) -> None:
+        """Pula em arco até `chao` (onde o pé encosta, em coordenadas da tela)."""
+        self.passeio = None
+        self.sentado = None
+        origem = QPointF(self.pos())
+        destino = QPointF(chao.x(), chao.y() - self.pe().y())
+        distancia = math.hypot(destino.x() - origem.x(), destino.y() - origem.y())
+        if distancia < 2:
+            self.sentado = sentar_em
+            return
+        duracao = min(1.8, 0.45 + distancia / 900)
+        arco = min(140, 30 + distancia * 0.25) if arco is None else arco
+        self.viagem = (time.time(), origem, destino, duracao, arco, sentar_em)
+
+    def voltar_pra_casa(self) -> None:
+        casa = posicao_do_canto(self.canto, self.area(), self.size())
+        self.ir_para(QPoint(casa.x(), casa.y() + int(self.pe().y())))
+
+    def cair(self) -> None:
+        """A janela onde estava sentado sumiu: cai reto até o chão e depois volta pra casa."""
+        self.sentado = None
+        chao = self.area().bottom() - 4
+        self.ir_para(QPoint(self.x(), chao), sentar_em=(0, 0), arco=0)  # janela 0 = chão
+
+    def _viajar(self, agora: float) -> None:
+        inicio, origem, destino, duracao, arco, sentar_em = self.viagem
+        t = min(1.0, (agora - inicio) / duracao)
+        if arco == 0:
+            t_pos = t * t  # caindo: acelera
+        else:
+            t_pos = t
+        x = origem.x() + (destino.x() - origem.x()) * t_pos
+        y = origem.y() + (destino.y() - origem.y()) * t_pos - arco * math.sin(math.pi * t)
+        self.move(round(x), round(y))
+        if t >= 1:
+            self.viagem = None
+            self.pular()  # aterrissagem com quique
+            if sentar_em and sentar_em[0] == 0:  # caiu no chão
+                QTimer.singleShot(1200, lambda: self.viagem is None and self.sentado is None and self.voltar_pra_casa())
+            else:
+                self.sentado = sentar_em
+            self.moveu.emit()
+
+    def _seguir_janela(self, agora: float) -> None:
+        if agora - self.ultimo_seguir < 0.25:
+            return
+        self.ultimo_seguir = agora
+        hwnd, dx = self.sentado
+        r = self.moldura(hwnd)
+        if r is None or r.top() - self.area().top() < 100:  # fechou, minimizou ou maximizou: sem lugar pra sentar
+            self.cair()
+            return
+        x = max(r.left(), min(r.left() + dx, r.right() - self.width()))
+        destino = QPoint(x, r.top() - int(self.pe().y()))
+        if destino != self.pos():
+            self.move(destino)
+            self.moveu.emit()
+
     def passear(self) -> None:
-        if self.estado == "parado" and self.arraste is None and self.passeio is None:
+        if self.estado == "parado" and self.arraste is None and self.passeio is None and self.em_casa():
             para_dentro = -1 if self.canto.endswith("dir") else 1
             self.passeio = (time.time(), para_dentro * random.uniform(80, 220))
 
@@ -137,9 +215,16 @@ class Pet(QWidget):
             self.voltar()
         if self.passeio is not None:
             self._andar(agora)
+        if self.viagem is not None:
+            self._viajar(agora)
+        elif self.sentado is not None and self.sentado[0]:
+            self._seguir_janela(agora)
         mouse = QPointF(self.mapFromGlobal(QCursor.pos()))
         b = self.pe()
         alvos = [pupila(QPointF(b.x() + ox, b.y() + oy), mouse, 3.2) for ox, oy in OLHOS]
+        if self.viagem is not None:  # olha pra onde está pulando
+            indo = self.viagem[2] - self.viagem[1]
+            alvos = [QPointF(math.copysign(3, indo.x()) if abs(indo.x()) > 5 else 0, 2 if indo.y() > 0 else -2)] * 2
         if self.passeio is not None:  # olha pra onde está andando
             indo = math.cos(math.pi * (agora - self.passeio[0]) / PASSEIO_S) * self.passeio[1]
             alvos = [QPointF(math.copysign(3, indo), 0.5)] * 2
@@ -151,13 +236,34 @@ class Pet(QWidget):
             self.ultimo_pulo = self.pulo_inicio = agora
         if self.estado == "chamando" and agora - self.pulo_inicio > 0.9:
             self.pulo_inicio = agora
+        self._sentir_carinho(mouse, b, agora)
         if agora >= self.proxima_piscada:
             self.piscar_ate = agora + 0.12
             self.proxima_piscada = agora + random.uniform(2.5, 6)
         self.update()
 
+    def _sentir_carinho(self, mouse: QPointF, b: QPointF, agora: float) -> None:
+        if not (abs(mouse.x() - b.x()) < LARGURA / 2 and -ALTURA * 1.2 < mouse.y() - b.y() < 0) or self.arraste:
+            self.carinho_x = None
+            return
+        if self.carinho_x is not None and abs(mouse.x() - self.carinho_x) > 3:
+            lado = 1 if mouse.x() > self.carinho_x else -1
+            if self.carinho_lado and lado != self.carinho_lado:
+                self.carinho_viradas.append(agora)
+            self.carinho_lado = lado
+        if self.carinho_x is None or abs(mouse.x() - self.carinho_x) > 3:
+            self.carinho_x = mouse.x()
+        self.carinho_viradas = [t for t in self.carinho_viradas if agora - t < 1.5]
+        if len(self.carinho_viradas) >= 4 and self.estado not in ("pensando", "chamando"):
+            self.carinho_viradas.clear()
+            self.coracoes_ate = agora + 2.5
+            self.definir_estado("feliz", 2500)
+            self.carinho.emit()
+
     def _corpo(self, agora: float) -> tuple[float, float, float]:
         """(deslocamento y, escala x, escala y) com respiração e squash & stretch do pulo."""
+        if self.viagem is not None:  # no ar: esticadinho
+            return 0, 0.9, 1.1
         p = (agora - self.pulo_inicio) / 0.5
         if 0 <= p <= 1:
             altura = 22 if self.estado != "chamando" else 16
@@ -194,6 +300,12 @@ class Pet(QWidget):
         corpo.cubicTo(meia, -ALTURA * 0.08, meia * 0.6, 0, 0, 0)
         corpo.cubicTo(-meia * 0.6, 0, -meia, -ALTURA * 0.08, -meia, -ALTURA * 0.38)
         corpo.cubicTo(-meia, ponta * 0.55, -meia * 0.25, ponta * 0.8, 0, ponta)
+        if self.sentado is not None and self.sentado[0]:  # pezinhos balançando pra fora da beirada
+            p.setPen(QPen(self.cor_borda, 1.5))
+            p.setBrush(self.cor)
+            for i, ox in enumerate((-13, 13)):
+                balanço = 3 * math.sin(agora * 3 + i * math.pi)
+                p.drawEllipse(QPointF(ox + balanço, 5), 6, 4.5)
         p.setPen(QPen(self.cor_borda, 2))
         p.setBrush(self.cor)
         p.drawPath(corpo)
@@ -239,6 +351,29 @@ class Pet(QWidget):
             for ox, oy in OLHOS:
                 p.drawEllipse(QPointF(ox, oy), 10, 9)
             p.drawLine(QPointF(-5, -39), QPointF(5, -39))
+        elif self.acessorio == "cachecol":
+            p.setPen(QPen(QColor("#a12d2d"), 1.2))
+            for i, x in enumerate(range(-36, 36, 8)):  # listrado vermelho e branco
+                p.setBrush(QColor("#e04848") if i % 2 == 0 else QColor("#fff3f3"))
+                p.drawRect(QRectF(x, -13, 8, 8))
+            p.setBrush(QColor("#e04848"))
+            ponta = QPainterPath(QPointF(16, -6))
+            ponta.lineTo(26, 6)
+            ponta.lineTo(18, 8)
+            ponta.lineTo(10, -6)
+            ponta.closeSubpath()
+            p.drawPath(ponta)
+        elif self.acessorio == "coroa":
+            p.setPen(QPen(QColor("#b8860b"), 1.5))
+            p.setBrush(QColor("#ffd34d"))
+            coroa = QPainterPath(QPointF(-13, -76))
+            for x, y in ((-13, -92), (-6, -82), (0, -96), (6, -82), (13, -92), (13, -76)):
+                coroa.lineTo(x, y)
+            coroa.closeSubpath()
+            p.drawPath(coroa)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#e0245e"))
+            p.drawEllipse(QPointF(0, -81), 2.5, 2.5)
 
     def rosto(self) -> Estado:
         """Careta desenhada: igual ao estado, menos quando está sendo arrastado (cara de "uou!")."""
@@ -251,6 +386,15 @@ class Pet(QWidget):
             if e == "cochilo" or (agora < self.piscar_ate and e in ("parado", "fome", "boca")):
                 p.setPen(tinta)
                 p.drawLine(QPointF(ox - 5, oy + 1), QPointF(ox + 5, oy + 1))
+                continue
+            if e == "foco":  # olhar firme: olho meio fechado e sobrancelha baixa
+                p.setPen(Qt.NoPen)
+                p.setBrush(Qt.white)
+                p.drawEllipse(QPointF(ox, oy + 1.5), RAIO_OLHO, 4.5)
+                p.setBrush(TINTA)
+                p.drawEllipse(QPointF(ox, oy + 2), 3, 3)
+                p.setPen(tinta)
+                p.drawLine(QPointF(ox - 7, oy - 5 - (2 if ox < 0 else -2)), QPointF(ox + 7, oy - 5 + (2 if ox < 0 else -2)))
                 continue
             if e in ("feliz", "pulo", "chamando"):
                 p.setPen(tinta)
@@ -296,6 +440,8 @@ class Pet(QWidget):
             p.drawPath(onda)
         elif e == "pensando":
             p.drawLine(QPointF(-4, y + 1), QPointF(4, y))
+        elif e == "foco":
+            p.drawLine(QPointF(-4, y), QPointF(4, y))
         elif e == "cochilo":
             p.drawEllipse(QPointF(0, y + 1), 2.5, 2)
         else:
@@ -315,6 +461,17 @@ class Pet(QWidget):
             for i in range(3):
                 if int(agora * 3) % 4 > i:
                     p.drawEllipse(QPointF(22 + i * 7, -66), 2, 2)
+        elif e == "foco":  # faixa na testa, com o nózinho balançando
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#e04848"))
+            p.drawRoundedRect(QRectF(-31, -58, 62, 7), 3, 3)
+            balanço = 2 * math.sin(agora * 2)
+            for dy in (-3, 3):
+                fita = QPainterPath(QPointF(30, -55))
+                fita.lineTo(42, -55 + dy * 2 + balanço)
+                fita.lineTo(40, -55 + dy * 3 + balanço)
+                fita.closeSubpath()
+                p.drawPath(fita)
         elif e == "fome":
             t = (agora % 2) / 2  # a gota escorre e some a cada 2 s
             p.setPen(Qt.NoPen)
@@ -324,6 +481,14 @@ class Pet(QWidget):
             gota.quadTo(36, -42 + y, 30, -40 + y)
             gota.quadTo(24, -42 + y, 30, -52 + y)
             p.drawPath(gota)
+        elif e == "feliz" and agora < self.coracoes_ate:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#ff5c8a"))
+            for i, x in enumerate((-30, 32, 0)):
+                t = (agora * 0.8 + i * 0.33) % 1  # coraçõezinhos subindo e sumindo
+                p.setOpacity(1 - t)
+                _coracao(p, QPointF(x + 4 * math.sin(agora * 4 + i), -60 - 30 * t), 5)
+            p.setOpacity(1)
         elif e == "feliz":
             p.setPen(QPen(QColor("#f5b800"), 1.8, Qt.SolidLine, Qt.RoundCap))
             for i, (x, y) in enumerate([(-34, -66), (36, -60), (28, -82)]):
@@ -331,9 +496,24 @@ class Pet(QWidget):
                 p.drawLine(QPointF(x - r, y), QPointF(x + r, y))
                 p.drawLine(QPointF(x, y - r), QPointF(x, y + r))
 
+    # ---- atalho global ----
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        # cada janela nova (o modo fantasma recria) precisa registrar de novo; repetir na mesma não faz mal
+        self.atalho_ok = registrar_atalho(int(self.winId())) or self.atalho_ok
+
+    def nativeEvent(self, tipo, mensagem):
+        if bytes(tipo) == b"windows_generic_MSG":
+            msg = wintypes.MSG.from_address(int(mensagem))
+            if msg.message == WM_HOTKEY:
+                self.atalho.emit()
+                return True, 0
+        return super().nativeEvent(tipo, mensagem)
+
     # ---- mouse ----
     def mousePressEvent(self, ev):
         self.parar_passeio()
+        self.viagem = None  # pegou no ar: para onde está
         if ev.button() == Qt.LeftButton:
             self.arraste = ev.globalPosition().toPoint() - self.pos()
             self.arrastou = False
@@ -345,6 +525,7 @@ class Pet(QWidget):
             destino = ev.globalPosition().toPoint() - self.arraste
             if self.arrastou or (destino - self.pos()).manhattanLength() > 5:
                 self.arrastou = True
+                self.sentado = None
                 self.move(destino)
 
     def mouseReleaseEvent(self, ev):
@@ -356,6 +537,13 @@ class Pet(QWidget):
             self.clicado.emit()
             return
         self.arrastou = False
+        pe = self.mapToGlobal(self.pe().toPoint())
+        embaixo = self.janela_embaixo(pe)
+        if embaixo is not None:  # solto em cima de uma janela: senta nela
+            hwnd, r = embaixo
+            x = max(r.left(), min(self.x(), r.right() - self.width()))
+            self.ir_para(QPoint(x, r.top()), sentar_em=(hwnd, x - r.left()))
+            return
         self.canto = canto_mais_proximo(self.geometry().center(), self.area())
         self.encaixar()
         self.pular()  # quiquinho ao cair no canto
@@ -377,6 +565,13 @@ class Pet(QWidget):
         self.voltar()
         if texto:
             self.comeu.emit(texto)
+
+
+def _coracao(p: QPainter, c: QPointF, r: float) -> None:
+    caminho = QPainterPath(QPointF(c.x(), c.y() + r))
+    caminho.cubicTo(c.x() - r * 2, c.y() - r * 0.2, c.x() - r * 0.9, c.y() - r * 1.6, c.x(), c.y() - r * 0.5)
+    caminho.cubicTo(c.x() + r * 0.9, c.y() - r * 1.6, c.x() + r * 2, c.y() - r * 0.2, c.x(), c.y() + r)
+    p.drawPath(caminho)
 
 
 if __name__ == "__main__":
