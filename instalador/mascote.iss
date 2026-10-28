@@ -59,7 +59,7 @@ Root: HKCU; Subkey: "Software\{#Chave}"; ValueType: string; ValueName: "Iniciar"
 
 [Run]
 ; baixa (ou copia do Ollama) o modelo; se falhar, o pet oferece depois
-Filename: "{app}\Mascote.exe"; Parameters: "--baixar-modelo"; StatusMsg: "Baixando a IA..."; Flags: runasoriginaluser waituntilterminated; Check: IAEmbutida
+Filename: "{app}\Mascote.exe"; Parameters: "--baixar-modelo"; StatusMsg: "Baixando a IA..."; Flags: runasoriginaluser waituntilterminated; Check: IAEmbutida and not WizardSilent
 Filename: "{app}\Mascote.exe"; Description: "Abrir o {#Produto} agora"; Flags: nowait postinstall skipifsilent runasoriginaluser
 ; atualização pelo próprio pet (modo silencioso): reabre sozinho no fim
 Filename: "{app}\Mascote.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent
@@ -231,8 +231,9 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Codigo: Integer;
 begin
-  { fecha o pet (e com ele o llama-server) antes de atualizar }
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Mascote.exe /T', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+  { fecha o pet antes de atualizar; o llama-server morre junto pelo Job do Windows.
+    Sem /T: quando a atualização vem do pet, este instalador é filho dele e o /T o mataria também. }
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Mascote.exe', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
   Result := '';
 end;
 
