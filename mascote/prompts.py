@@ -76,10 +76,12 @@ def escolher_memorias(memorias: list[str], pergunta: str, limite: int = LIMITE_M
     return [memorias[i] for i in sorted(escolhidas)]
 
 
-def mensagens_chat(historico: list[dict], memorias: list[str], agora: datetime, nome: str = "Mascote") -> list[dict]:
+def mensagens_chat(historico: list[dict], memorias: list[str], agora: datetime, nome: str = "Mascote",
+                   tom: str = "") -> list[dict]:
     pergunta = historico[-1]["content"] if historico else ""
     lembrancas = "\n".join(f"- {m}" for m in escolher_memorias(memorias, pergunta)) or "- (nada ainda)"
-    cabeca = f"{PERSONALIDADE.replace('{nome}', nome)}\n\n{_agora(agora)}\nO que você lembra do usuário:\n{lembrancas}\n\n---\n\n"
+    jeito = f" {tom}" if tom else ""
+    cabeca = f"{PERSONALIDADE.replace('{nome}', nome)}{jeito}\n\n{_agora(agora)}\nO que você lembra do usuário:\n{lembrancas}\n\n---\n\n"
     recentes, total = [], len(cabeca)
     for m in reversed(historico[-12:]):  # da mais nova pra trás, enquanto couber
         tamanho = len(truncar(m["content"]))

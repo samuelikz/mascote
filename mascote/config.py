@@ -6,7 +6,7 @@ from pathlib import Path
 
 PADROES = {
     "canto": "inf_dir", "ultima_comida": None, "almoco": "12:00", "bom_dia": None,
-    "iniciativa": True, "voz": False, "area_transferencia": False, "explorar": True, "cor": "verde", "acessorio": "nenhum",
+    "iniciativa": True, "voz": False, "area_transferencia": False, "explorar": True, "amizade": 0, "cor": "verde", "acessorio": "nenhum",
 }
 
 

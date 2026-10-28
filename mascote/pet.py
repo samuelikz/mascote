@@ -10,13 +10,13 @@ from PySide6.QtWidgets import QWidget
 
 from .janelas import WM_HOTKEY, registrar_atalho
 
-Estado = Literal["parado", "pulo", "cochilo", "boca", "pensando", "feliz", "triste", "fome", "chamando"]
+Estado = Literal["parado", "pulo", "cochilo", "boca", "pensando", "feliz", "triste", "fome", "chamando", "foco"]
 
 CORES = {  # nome: (corpo, borda)
     "verde": ("#8fd3a8", "#5fae7c"), "azul": ("#9cc9f5", "#6a9fd6"), "rosa": ("#f5b3cf", "#d6809f"),
-    "amarelo": ("#f7dc8a", "#d4b14e"), "roxo": ("#c7b3f2", "#9b84d1"),
+    "amarelo": ("#f7dc8a", "#d4b14e"), "roxo": ("#c7b3f2", "#9b84d1"), "dourado": ("#ffd75e", "#c99a1c"),
 }
-ACESSORIOS = ["nenhum", "chapéu", "laço", "óculos"]
+ACESSORIOS = ["nenhum", "chapéu", "laço", "óculos", "cachecol", "coroa"]
 PASSEIO_S = 6.0
 TINTA = QColor("#234")
 LARGURA, ALTURA = 80, 66  # corpo
@@ -351,6 +351,29 @@ class Pet(QWidget):
             for ox, oy in OLHOS:
                 p.drawEllipse(QPointF(ox, oy), 10, 9)
             p.drawLine(QPointF(-5, -39), QPointF(5, -39))
+        elif self.acessorio == "cachecol":
+            p.setPen(QPen(QColor("#a12d2d"), 1.2))
+            for i, x in enumerate(range(-36, 36, 8)):  # listrado vermelho e branco
+                p.setBrush(QColor("#e04848") if i % 2 == 0 else QColor("#fff3f3"))
+                p.drawRect(QRectF(x, -13, 8, 8))
+            p.setBrush(QColor("#e04848"))
+            ponta = QPainterPath(QPointF(16, -6))
+            ponta.lineTo(26, 6)
+            ponta.lineTo(18, 8)
+            ponta.lineTo(10, -6)
+            ponta.closeSubpath()
+            p.drawPath(ponta)
+        elif self.acessorio == "coroa":
+            p.setPen(QPen(QColor("#b8860b"), 1.5))
+            p.setBrush(QColor("#ffd34d"))
+            coroa = QPainterPath(QPointF(-13, -76))
+            for x, y in ((-13, -92), (-6, -82), (0, -96), (6, -82), (13, -92), (13, -76)):
+                coroa.lineTo(x, y)
+            coroa.closeSubpath()
+            p.drawPath(coroa)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#e0245e"))
+            p.drawEllipse(QPointF(0, -81), 2.5, 2.5)
 
     def rosto(self) -> Estado:
         """Careta desenhada: igual ao estado, menos quando está sendo arrastado (cara de "uou!")."""
@@ -363,6 +386,15 @@ class Pet(QWidget):
             if e == "cochilo" or (agora < self.piscar_ate and e in ("parado", "fome", "boca")):
                 p.setPen(tinta)
                 p.drawLine(QPointF(ox - 5, oy + 1), QPointF(ox + 5, oy + 1))
+                continue
+            if e == "foco":  # olhar firme: olho meio fechado e sobrancelha baixa
+                p.setPen(Qt.NoPen)
+                p.setBrush(Qt.white)
+                p.drawEllipse(QPointF(ox, oy + 1.5), RAIO_OLHO, 4.5)
+                p.setBrush(TINTA)
+                p.drawEllipse(QPointF(ox, oy + 2), 3, 3)
+                p.setPen(tinta)
+                p.drawLine(QPointF(ox - 7, oy - 5 - (2 if ox < 0 else -2)), QPointF(ox + 7, oy - 5 + (2 if ox < 0 else -2)))
                 continue
             if e in ("feliz", "pulo", "chamando"):
                 p.setPen(tinta)
@@ -408,6 +440,8 @@ class Pet(QWidget):
             p.drawPath(onda)
         elif e == "pensando":
             p.drawLine(QPointF(-4, y + 1), QPointF(4, y))
+        elif e == "foco":
+            p.drawLine(QPointF(-4, y), QPointF(4, y))
         elif e == "cochilo":
             p.drawEllipse(QPointF(0, y + 1), 2.5, 2)
         else:
@@ -427,6 +461,17 @@ class Pet(QWidget):
             for i in range(3):
                 if int(agora * 3) % 4 > i:
                     p.drawEllipse(QPointF(22 + i * 7, -66), 2, 2)
+        elif e == "foco":  # faixa na testa, com o nózinho balançando
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#e04848"))
+            p.drawRoundedRect(QRectF(-31, -58, 62, 7), 3, 3)
+            balanço = 2 * math.sin(agora * 2)
+            for dy in (-3, 3):
+                fita = QPainterPath(QPointF(30, -55))
+                fita.lineTo(42, -55 + dy * 2 + balanço)
+                fita.lineTo(40, -55 + dy * 3 + balanço)
+                fita.closeSubpath()
+                p.drawPath(fita)
         elif e == "fome":
             t = (agora % 2) / 2  # a gota escorre e some a cada 2 s
             p.setPen(Qt.NoPen)

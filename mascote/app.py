@@ -8,7 +8,7 @@ from PySide6.QtCore import QFileSystemWatcher, QLocale, QObject, QTimer, Signal
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QSystemTrayIcon
 
-from . import atualizar, claude, config, explorar, memoria
+from . import atualizar, claude, config, diario, explorar, memoria
 from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
 from .baixar import ia_instalada
@@ -33,6 +33,7 @@ OPCOES = {  # liga/desliga do menu Ajustes: chave no config.json, rótulo
     "explorar": "Explorar a tela (sentar em janelas e ícones) 🐾",
 }
 FOLGA_EM_CIMA = 110  # espaço que o corpo precisa acima do lugar onde senta
+FOCO_MIN, PAUSA_MIN = 25, 5
 
 
 FALAS = {  # várias versões de cada frase, pra ele não soar repetido
@@ -159,6 +160,8 @@ class App(QObject):
         self.pet.comeu.connect(self.comeu)
         self.pet.mudou_canto.connect(self.mudou_canto)
         self.pet.carinho.connect(self.ganhou_carinho)
+        self.foco: tuple[str, float] | None = None  # ("foco" | "pausa", quando acaba em time.time())
+        self.fim_da_fase = QTimer(self, singleShot=True, timeout=self.acabou_fase)
         self.pet.moveu.connect(lambda: self.balao.isVisible() and self.posicionar_balao())
         self.pet.moldura = explorar.moldura
         self.pet.janela_embaixo = lambda pe: explorar.janela_embaixo(pe, self.pet.width()) if self.cfg["explorar"] else None
@@ -238,9 +241,71 @@ class App(QObject):
     def _mostrar_lembrete(self, id: int | None) -> None:
         """Lembrete na tela deixa o pet chamando até ser respondido, mesmo depois de outras caretas."""
         self.lembrete_na_tela = id
-        self.pet.base = "parado" if id is None else "chamando"
-        if self.pet.estado in ("parado", "chamando"):
+        self._atualizar_base()
+
+    def _atualizar_base(self) -> None:
+        """Pra onde as caretas com tempo voltam: lembrete esperando > modo foco > parado."""
+        focado = self.foco is not None and self.foco[0] == "foco"
+        self.pet.base = "chamando" if self.lembrete_na_tela is not None else "foco" if focado else "parado"
+        if self.pet.estado in ("parado", "chamando", "foco"):
             self.pet.voltar()
+
+    def anotar(self, tipo: str) -> None:
+        """Conta no diário; se a amizade subiu de nível, comemora."""
+        subiu = diario.registrar(self.cfg, tipo, datetime.now().date())
+        config.salvar(self.cfg)
+        if subiu:
+            _, nome, _, _ = diario.nivel(self.cfg)
+            premios = [item for item, n in diario.PREMIOS.items() if n == diario.nivel(self.cfg)[0]]
+            extra = f" ganhei: {', '.join(premios)} 🎁 (Ajustes → Aparência)" if premios else ""
+            self.pet.coracoes_ate = time.time() + 3
+            self.pet.definir_estado("feliz", 3000)
+            QTimer.singleShot(2500, lambda: self.dizer(f"subimos de nível! agora somos {nome} 💕{extra}", ms=8000))
+
+    # ---- modo foco ----
+    def comecar_foco(self) -> None:
+        self._fase("foco", FOCO_MIN)
+        self.dizer(f"modo foco! 🍅 {FOCO_MIN} min, eu fico quietinho aqui", ms=3000)
+
+    def parar_foco(self) -> None:
+        self.foco = None
+        self.fim_da_fase.stop()
+        self._atualizar_base()
+        self.dizer("parei o foco 👍", ms=2500)
+
+    def _fase(self, fase: str, minutos: int) -> None:
+        self.foco = (fase, time.time() + minutos * 60)
+        self.fim_da_fase.start(minutos * 60_000)
+        self._atualizar_base()
+        if fase == "foco":
+            self.pet.parar_passeio()
+            if not self.pet.em_casa() and self.pet.viagem is None:
+                self.pet.voltar_pra_casa()
+
+    def acabou_fase(self) -> None:
+        fase = self.foco[0] if self.foco else None
+        if fase == "foco":
+            self.anotar("focos")
+            self._fase("pausa", PAUSA_MIN)
+            self.pet.definir_estado("feliz", 3000)
+            self.dizer(f"foco concluído! 🍅🎉 agora {PAUSA_MIN} min de pausa: levanta, bebe água, alonga 🧘",
+                       [("pular pausa ⏭️", ("foco", "comecar")), ("parar ⏹️", ("foco", "parar"))], ms=None)
+        elif fase == "pausa":
+            self.foco = None
+            self._atualizar_base()
+            self.pet.definir_estado("chamando", 2000)
+            self.dizer("acabou a pausa! mais um foco? 🍅",
+                       [("bora 🍅", ("foco", "comecar")), ("chega por hoje", ("foco", "parar"))], ms=None)
+
+    def minutos_restantes(self) -> int:
+        return max(0, round((self.foco[1] - time.time()) / 60)) if self.foco else 0
+
+    def ver_semana(self) -> None:
+        hoje = datetime.now().date()
+        _, nome, _, falta = diario.nivel(self.cfg)
+        proximo = f"faltam {falta} pontos pro próximo nível" if falta else "nível máximo! 👑"
+        self.dizer(f"nossa semana 📊\n{diario.descrever_semana(diario.semana(self.cfg, hoje))}\n\n"
+                   f"somos {nome} 💕 ({self.cfg.get('amizade', 0)} pontos; {proximo})", ms=15000)
 
     def balao_fechou(self) -> None:
         self.esperando_quando = ""  # fechou o chat: desistiu do "pra quando?"
@@ -277,6 +342,11 @@ class App(QObject):
                 self.pet.definir_estado(novo)
         if ocioso > PARADA_S:
             self.ativo_desde = time.time()
+        if self.bandeja:
+            self.bandeja.setToolTip(f"{self.prefs['Nome']}" + (
+                f" · {self.foco[0]}: faltam {self.minutos_restantes()} min" if self.foco else ""))
+        if self.foco is not None and self.foco[0] == "foco":
+            return  # focado: não puxa assunto, não passeia, não explora
         if self.cfg["iniciativa"] and self.livre():
             self.puxar_assunto(agora)
         parado_de_vez = self.pet.viagem is None and self.pet.passeio is None
@@ -313,7 +383,11 @@ class App(QObject):
             hoje = [("almoço" if l.texto == "ALMOCO" else l.texto) + f" às {_hora(l.proximo)}"
                     for l in self.agenda.listar() if l.proximo.date() == agora.date() and l.proximo > agora]
             self.pet.definir_estado("feliz", 2000)
-            self.dizer(saudacao(agora, hoje), ms=10000)
+            texto = saudacao(agora, hoje)
+            passada = diario.semana(self.cfg, agora.date() - timedelta(days=1))
+            if agora.weekday() == 0 and any(passada.values()):  # segunda: resumo da semana que passou
+                texto += f"\nsemana passada: {diario.descrever_semana(passada)}"
+            self.dizer(texto, ms=12000)
         elif time.time() - self.ativo_desde > PAUSA_S:
             self.ativo_desde = time.time()
             self.pet.definir_estado("chamando", 2000)
@@ -347,9 +421,11 @@ class App(QObject):
             self.dizer(f"copia um texto e aperta {ATALHO} que eu como 😋", ms=4000)
 
     def ganhou_carinho(self) -> None:
-        if not self.balao.isVisible() and time.time() - self.ultimo_carinho > 20:
+        if time.time() - self.ultimo_carinho > 20:  # conta no máximo um carinho a cada 20 s
             self.ultimo_carinho = time.time()
-            self.dizer(fala("carinho"), ms=2500)
+            self.anotar("carinhos")
+            if not self.balao.isVisible():
+                self.dizer(fala("carinho"), ms=2500)
 
     # ---- Claude Code ----
     def evento_claude(self, caminho: str) -> None:
@@ -375,6 +451,7 @@ class App(QObject):
     # ---- comida ----
     def comeu(self, texto: str) -> None:
         self.comida = texto
+        self.anotar("comidas")
         self.cfg["ultima_comida"] = datetime.now().isoformat()
         config.salvar(self.cfg)
         self.pet.definir_estado("feliz", 1500)
@@ -402,9 +479,13 @@ class App(QObject):
             self.balao.fechar()
             if atualizar_com_janela(self.prefs["Nome"], dado):
                 self.dizer("instalando a atualização… já volto! 🔄", ms=None)
+        elif tipo == "foco":
+            self.balao.fechar()
+            self.comecar_foco() if dado == "comecar" else self.parar_foco()
         elif tipo == "feito":
             self.agenda.feito(dado, agora)
             self._mostrar_lembrete(None)
+            self.anotar("lembretes")
             self.pet.definir_estado("feliz", 2000)
             self.dizer(fala("feito"))
         elif tipo == "adiar":
@@ -443,8 +524,10 @@ class App(QObject):
             self.pedir(mensagens_extrair(texto, agora), ("lembrar", texto))
         else:
             self.historico.append({"role": "user", "content": texto})
+            self.anotar("conversas")
             fatos = [m["fato"] for m in memoria.listar()]
-            self.pedir(mensagens_chat(self.historico, fatos, agora, self.prefs["Nome"]), ("chat",))
+            tom = diario.nivel(self.cfg)[2]
+            self.pedir(mensagens_chat(self.historico, fatos, agora, self.prefs["Nome"], tom), ("chat",))
 
     # ---- respostas da IA ----
     def ia_escrevendo(self, parcial: str, etiqueta: tuple) -> None:
@@ -519,6 +602,11 @@ class App(QObject):
         if self.historico:
             m.addAction("Começar conversa nova 🧹", self.conversa_nova)
         m.addSeparator()
+        if self.foco:
+            m.addAction(f"Parar o {self.foco[0]} ⏹️ (faltam {self.minutos_restantes()} min)", self.parar_foco)
+        else:
+            m.addAction(f"Modo foco 🍅 ({FOCO_MIN} min)", self.comecar_foco)
+        m.addAction(f"Nossa semana 📊 (somos {diario.nivel(self.cfg)[1]})", self.ver_semana)
         m.addAction(f"Ver lembretes ⏰ ({lembretes})", self.ver_lembretes)
         m.addAction(f"O que eu lembro de você 🧠 ({memorias})", self.ver_memorias)
         m.addSeparator()
@@ -527,15 +615,16 @@ class App(QObject):
         ajustes.addAction(f"Meu nome ({self.prefs['Nome']})…", self.mudar_nome)
         ajustes.addAction("Modelo da IA…", self.escolher_ia)
         visual = ajustes.addMenu("Aparência 🎨")
-        for cor in CORES:
-            a = visual.addAction(f"cor {cor}", lambda c=cor: self.vestir(cor=c))
-            a.setCheckable(True)
-            a.setChecked(cor == self.cfg["cor"])
-        visual.addSeparator()
-        for item in ACESSORIOS:
-            a = visual.addAction(item, lambda i=item: self.vestir(acessorio=i))
-            a.setCheckable(True)
-            a.setChecked(item == self.cfg["acessorio"])
+        for opcoes, chave, rotulo in ((CORES, "cor", "cor {}"), (ACESSORIOS, "acessorio", "{}")):
+            for item in opcoes:
+                if diario.liberado(self.cfg, item):
+                    a = visual.addAction(rotulo.format(item), lambda c=chave, i=item: self.vestir(**{c: i}))
+                    a.setCheckable(True)
+                    a.setChecked(item == self.cfg[chave])
+                else:
+                    nome = diario.NIVEIS[diario.PREMIOS[item]][1]
+                    visual.addAction(f"🔒 {rotulo.format(item)} (quando formos {nome})").setEnabled(False)
+            visual.addSeparator()
         ajustes.addSeparator()
         for chave, rotulo in OPCOES.items():
             a = ajustes.addAction(rotulo, lambda c=chave: self.alternar(c))

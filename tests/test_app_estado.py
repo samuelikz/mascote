@@ -236,3 +236,38 @@ def test_explorar_escolhe_um_lugar_e_o_balao_abre_perto_de_onde_ele_esta(mascote
     mascote.abrir_chat()
     assert mascote.pet.pos() == QPoint(150, 300 - int(mascote.pet.pe().y()))  # não teleporta pra casa
     assert mascote.balao.isVisible()
+
+
+def test_modo_foco_pausa_e_volta_com_lembrete_no_meio(mascote, monkeypatch):
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.pet.show()
+    mascote.comecar_foco()
+    assert mascote.foco[0] == "foco" and mascote.pet.estado == "foco" and mascote.fim_da_fase.isActive()
+    mascote.agenda.adicionar("beber água", datetime.now() - timedelta(minutes=1))
+    mascote.checar()  # lembrete chega no meio do foco
+    assert mascote.pet.estado == "chamando"
+    mascote.escolheu(("feito", mascote.lembrete_na_tela))
+    mascote.pet.estado_ate = 0.1
+    mascote.pet.passo()
+    assert mascote.pet.estado == "foco"  # respondeu o lembrete: volta a focar
+    mascote.acabou_fase()
+    assert mascote.foco[0] == "pausa" and mascote.cfg["diario"][datetime.now().date().isoformat()]["focos"] == 1
+    mascote.acabou_fase()
+    assert mascote.foco is None and mascote.pet.base == "parado"
+
+
+def test_subir_de_nivel_comemora_e_o_chat_leva_o_tom(mascote, monkeypatch):
+    from PySide6.QtWidgets import QLabel
+
+    pedidos = []
+    monkeypatch.setattr(mascote.ia, "pedir", lambda msgs, etiqueta, **kw: pedidos.append(msgs))
+    monkeypatch.setattr(modulo_app.QTimer, "singleShot", lambda ms, f: f())  # sem esperar a comemoração
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.cfg["amizade"] = 58
+    mascote.anotar("comidas")  # 60: amigos, libera o cachecol
+    assert "agora somos amigos" in mascote.balao.findChildren(QLabel)[-1].text()
+    assert "cachecol" in mascote.balao.findChildren(QLabel)[-1].text()
+    mascote.enviou("oi")
+    assert "Vocês são amigos" in pedidos[-1][0]["content"]
+    mascote.ver_semana()
+    assert "nossa semana" in mascote.balao.findChildren(QLabel)[-1].text()
