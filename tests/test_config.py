@@ -44,3 +44,19 @@ def test_preferencias_do_instalador_com_padroes():
 def test_ia_desconhecida_vira_embutida():
     config.salvar_preferencia("IA", "qualquer")
     assert config.preferencias()["IA"] == "embutida"
+
+
+def test_identidade_vem_da_pasta_instalada(monkeypatch):
+    import sys
+
+    assert config.identidade() == "Mascote"  # rodando do código-fonte
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\Users\x\AppData\Local\Programs\MascoteTeste\Mascote.exe")
+    assert config.identidade() == "MascoteTeste"
+    monkeypatch.setattr(sys, "executable", r"D:\outro lugar\Mascote.exe")
+    assert config.identidade() == "Mascote"
+    monkeypatch.delenv("MASCOTE_DADOS")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\nao-existe-mascote")
+    monkeypatch.setattr(sys, "executable", r"C:\P\MascoteTeste\Mascote.exe")
+    monkeypatch.setattr(config.Path, "mkdir", lambda *a, **k: None)
+    assert str(config.pasta_dados()).endswith(r"MascoteTeste\dados")

@@ -9,8 +9,18 @@ RECURSOS = PASTA_APP / "recursos"
 PADROES = {"canto": "inf_dir", "ultima_comida": None, "almoco": "12:00"}
 
 
+def identidade() -> str:
+    """Nome da pasta onde o .exe foi instalado ("Mascote", ou "MascoteTeste" no instalador de teste).
+    Registro, dados e modelo seguem essa identidade, então duas instalações não se misturam."""
+    if getattr(sys, "frozen", False):
+        pasta = Path(sys.executable).parent.name
+        if pasta.lower().startswith("mascote"):
+            return pasta
+    return "Mascote"
+
+
 def pasta_dados() -> Path:
-    pasta = Path(os.environ.get("MASCOTE_DADOS") or Path(os.environ["LOCALAPPDATA"]) / "Mascote" / "dados")
+    pasta = Path(os.environ.get("MASCOTE_DADOS") or Path(os.environ["LOCALAPPDATA"]) / identidade() / "dados")
     pasta.mkdir(parents=True, exist_ok=True)
     return pasta
 
@@ -43,7 +53,7 @@ PREFERENCIAS_PADRAO = {"Nome": "Mascote", "IA": "embutida", "ModeloOllama": "gem
 
 
 def _chave_registro() -> str:
-    return os.environ.get("MASCOTE_REGISTRO", r"Software\Mascote")
+    return os.environ.get("MASCOTE_REGISTRO", rf"Software\{identidade()}")
 
 
 def preferencias() -> dict:

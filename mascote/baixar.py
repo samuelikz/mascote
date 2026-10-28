@@ -18,7 +18,9 @@ class ErroDownload(Exception):
 
 
 def pasta_modelo() -> Path:
-    return Path(os.environ.get("MASCOTE_MODELO_DIR") or Path(os.environ["LOCALAPPDATA"]) / "Mascote" / "modelo")
+    from .config import identidade
+
+    return Path(os.environ.get("MASCOTE_MODELO_DIR") or Path(os.environ["LOCALAPPDATA"]) / identidade() / "modelo")
 
 
 def caminho_modelo() -> Path:
