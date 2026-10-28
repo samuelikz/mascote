@@ -23,7 +23,10 @@ def ler_json(caminho: Path, padrao):
 
 
 def gravar_json(caminho: Path, dados) -> None:
-    caminho.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    # grava num temporário e troca de uma vez: queda de energia no meio não estraga o arquivo
+    temporario = caminho.with_suffix(".tmp")
+    temporario.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporario, caminho)
 
 
 def carregar() -> dict:

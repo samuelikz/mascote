@@ -81,3 +81,14 @@ def test_extrair_traz_calendario_dos_proximos_dias():
 
 def test_extracao_tira_me_lembra_do_texto():
     assert ler_extracao('{"texto":"Me lembra de ir na academia","quando":null}')[0] == "ir na academia"
+
+
+def test_quando_com_fuso_vira_hora_local_sem_fuso():  # revisão #7
+    assert ler_extracao('{"texto":"x","quando":"2026-10-28T09:00-03:00"}')[1].tzinfo is None
+
+
+def test_chat_cabe_no_contexto_mesmo_com_memorias_e_historico_enormes():  # revisão #3
+    hist = [{"role": "user" if i % 2 == 0 else "assistant", "content": "a" * 6000} for i in range(11)]
+    msgs = mensagens_chat(hist, ["m" * 6000] * 10, AGORA)
+    assert sum(len(m["content"]) for m in msgs) <= 12000
+    assert msgs[0]["role"] == "user" and msgs[-1]["role"] == "user" and msgs[-1]["content"].endswith("a" * 6000)

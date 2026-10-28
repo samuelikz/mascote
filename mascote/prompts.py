@@ -4,6 +4,8 @@ import unicodedata
 from datetime import datetime, timedelta
 
 LIMITE = 6000
+ORCAMENTO = 9000  # caracteres por pedido de chat (~2300 tokens): cabe no contexto 4096 com folga pra resposta
+LIMITE_MEMORIAS = 2000
 SIGLAS = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"]
 PALAVRAS_PT = set(
     "não nao você voce vc pra com tudo oi olá ola está tá eu meu minha isso muito obrigado obrigada também tambem "
@@ -41,13 +43,24 @@ def _pedido(instrucao: str, texto: str) -> list[dict]:
 
 
 def mensagens_chat(historico: list[dict], memorias: list[str], agora: datetime) -> list[dict]:
-    recentes = historico[-12:]
+    linhas = []
+    for m in reversed(memorias):  # as mais novas primeiro, até o limite
+        if sum(len(l) for l in linhas) + len(m) > LIMITE_MEMORIAS:
+            break
+        linhas.insert(0, f"- {m}")
+    lembrancas = "\n".join(linhas) or "- (nada ainda)"
+    cabeca = f"{PERSONALIDADE}\n\n{_agora(agora)}\nO que você lembra do usuário:\n{lembrancas}\n\n---\n\n"
+    recentes, total = [], len(cabeca)
+    for m in reversed(historico[-12:]):  # da mais nova pra trás, enquanto couber
+        tamanho = len(truncar(m["content"]))
+        if recentes and total + tamanho > ORCAMENTO:
+            break
+        recentes.insert(0, m)
+        total += tamanho
     while recentes and recentes[0]["role"] != "user":  # Gemma exige começar em user
         recentes = recentes[1:]
     if not recentes:
         return []
-    lembrancas = "\n".join(f"- {m}" for m in memorias) or "- (nada ainda)"
-    cabeca = f"{PERSONALIDADE}\n\n{_agora(agora)}\nO que você lembra do usuário:\n{lembrancas}\n\n---\n\n"
     primeira = {"role": "user", "content": cabeca + truncar(recentes[0]["content"])}
     return [primeira] + [{"role": m["role"], "content": truncar(m["content"])} for m in recentes[1:]]
 
@@ -132,6 +145,8 @@ def ler_extracao(resposta: str) -> tuple[str, datetime | None, dict | None] | No
         return None
     try:
         quando = datetime.fromisoformat(obj.get("quando"))
+        if quando.tzinfo:  # "...Z" ou "-03:00": vira hora local sem fuso, como o resto do app
+            quando = quando.astimezone().replace(tzinfo=None)
     except (TypeError, ValueError):
         quando = None
     texto = re.sub(r"^\s*me\s+lembr[ae]\s+(de\s+)?", "", obj["texto"], flags=re.IGNORECASE).strip()

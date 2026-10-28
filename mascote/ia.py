@@ -154,7 +154,7 @@ class PonteIA(QObject):
         def trabalho():
             try:
                 self.pronto.emit(self.servidor.perguntar(mensagens, max_tokens, temperatura), etiqueta)
-            except ErroIA as e:
+            except Exception as e:  # qualquer falha vira cara triste, nunca "pensando" pra sempre
                 self.falhou.emit(str(e), etiqueta)
 
         threading.Thread(target=trabalho, daemon=True).start()

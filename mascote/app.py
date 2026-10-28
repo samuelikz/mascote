@@ -18,6 +18,7 @@ from .prompts import (
 DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
 FOME_HORAS = 4
 COCHILO_S = 600
+LIMITE_MEMORIA = 500  # caracteres por item guardado; o chat leva as memórias em todo pedido
 
 
 def escolher_fala_lembrete(l: Lembrete) -> str:
@@ -50,6 +51,11 @@ def descrever_quando(quando: datetime, regra: dict | None, agora: datetime) -> s
         return f"{'todo' if dias[0] >= 5 else 'toda'} {DIAS[dias[0]]} às {h}"
     curtos = [DIAS[d][:3] for d in dias]
     return f"toda {', '.join(curtos[:-1])} e {curtos[-1]} às {h}"
+
+
+def parametros(tipo: str) -> tuple[float, int]:
+    """(temperatura, max_tokens): JSON e texto pronto pedem resposta firme; texto pronto precisa de espaço."""
+    return {"lembrar": (0.1, 256), "resultado": (0.3, 2048)}.get(tipo, (0.7, 512))
 
 
 def ajustar_quando(quando: datetime, regra: dict | None, agora: datetime) -> datetime | None:
@@ -86,6 +92,7 @@ class App(QObject):
         self.balao.escolheu.connect(self.escolheu)
         self.balao.enviou.connect(self.enviou)
         self.balao.apagar.connect(self.apagar)
+        self.balao.fechou.connect(self.balao_fechou)
         QApplication.instance().aboutToQuit.connect(self.servidor.desligar)
 
     def iniciar(self) -> None:
@@ -105,9 +112,11 @@ class App(QObject):
 
     def pedir(self, mensagens: list[dict], etiqueta: tuple) -> None:
         self.pet.definir_estado("pensando")
-        # JSON e texto pronto precisam de resposta firme; conversa pode variar
-        temperatura = {"lembrar": 0.1, "resultado": 0.3}.get(etiqueta[0], 0.7)
-        self.ia.pedir(mensagens, etiqueta, temperatura=temperatura)
+        temperatura, max_tokens = parametros(etiqueta[0])
+        self.ia.pedir(mensagens, etiqueta, max_tokens=max_tokens, temperatura=temperatura)
+
+    def balao_fechou(self) -> None:
+        self.esperando_quando = ""  # fechou o chat: desistiu do "pra quando?"
 
     # ---- relógio ----
     def checar(self) -> None:
@@ -119,13 +128,19 @@ class App(QObject):
             return
         if not self.pet.isVisible():
             self.pet.show()
-        if self.lembrete_na_tela is None and not (self.balao.modo == "chat" and self.balao.isVisible()):
+        if self.lembrete_na_tela is not None and not (self.balao.isVisible() and self.balao.modo == "lembrete"):
+            # algo tampou o balão (comida, menu, tela cheia): o lembrete continua vencido e volta agora
+            self.lembrete_na_tela = None
+            self.pet.definir_estado("parado")
+        if self.lembrete_na_tela is None:
             vencidos = self.agenda.vencidos(agora)
             if vencidos:
                 l = vencidos[0]
                 self.lembrete_na_tela = l.id
                 self.pet.definir_estado("chamando")
-                self.dizer(escolher_fala_lembrete(l), [("feito ✅", ("feito", l.id)), ("depois ⏰", ("adiar", l.id))], None)
+                self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+                self.balao.falar(escolher_fala_lembrete(l), [("feito ✅", ("feito", l.id)), ("depois ⏰", ("adiar", l.id))],
+                                 None, modo="lembrete")
                 return
         if self.pet.estado in ("parado", "fome", "cochilo") and self.lembrete_na_tela is None:
             faminto = agora - datetime.fromisoformat(self.cfg["ultima_comida"]) > timedelta(hours=FOME_HORAS)
@@ -160,7 +175,7 @@ class App(QObject):
         elif dado == "lembrar":
             self.pedir(mensagens_extrair(self.comida, agora), ("lembrar", self.comida))
         elif dado == "guardar":
-            memoria.adicionar(truncar(self.comida))
+            memoria.adicionar(self.comida.strip()[:LIMITE_MEMORIA])
             self.pet.definir_estado("feliz", 2000)
             self.dizer("guardei! 🧠")
         elif dado == "melhorar":
@@ -216,7 +231,9 @@ class App(QObject):
         if quando is None:
             self.esperando_quando = texto
             if not (self.balao.modo == "chat" and self.balao.isVisible()):
-                self.abrir_chat()
+                # a resposta chega segundos depois do clique: abre sem roubar o foco de quem está digitando
+                self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+                self.balao.abrir_chat(self.historico, ativar=False)
             self.balao.acrescentar_chat("assistant", f"\"{texto}\" pra quando? 🤔")
             return
         self.agenda.adicionar(texto, quando, regra)

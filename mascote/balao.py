@@ -86,8 +86,8 @@ class Balao(QWidget):
             self.activateWindow()
 
     # ---- modos ----
-    def falar(self, texto: str, botoes: list[tuple[str, object]] = [], ms: int | None = 6000) -> None:
-        self._limpar("falar")
+    def falar(self, texto: str, botoes: list[tuple[str, object]] = [], ms: int | None = 6000, modo: str = "falar") -> None:
+        self._limpar(modo)
         self.corpo.addWidget(self._texto(texto))
         if botoes:
             self.corpo.addLayout(self._botoes(botoes))
@@ -113,7 +113,7 @@ class Balao(QWidget):
         self.corpo.addLayout(linha)
         self._mostrar()
 
-    def abrir_chat(self, historico: list[dict]) -> None:
+    def abrir_chat(self, historico: list[dict], ativar: bool = True) -> None:
         self._limpar("chat")
         conteudo = QWidget()
         self.chat_lista = QVBoxLayout(conteudo)
@@ -130,8 +130,9 @@ class Balao(QWidget):
             self.acrescentar_chat("assistant", "oi! 😄 quer conversar, melhorar uma mensagem ou traduzir algo?")
         for m in historico:
             self.acrescentar_chat(m["role"], m["content"])
-        self._mostrar(ativar=True)
-        self.entrada.setFocus()
+        self._mostrar(ativar=ativar)
+        if ativar:
+            self.entrada.setFocus()
 
     def acrescentar_chat(self, papel: str, texto: str) -> None:
         if self.chat_lista is None:
