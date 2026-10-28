@@ -106,3 +106,15 @@ def test_ollama_de_verdade_lista_modelos_e_responde():
     cliente = ClienteOllama("gemma2:9b", manter="0")  # descarrega logo, pra não brigar por VRAM com o llama-server
     assert "gemma2:9b" in cliente.modelos()
     assert cliente.perguntar([{"role": "user", "content": "Responda só: oi"}], max_tokens=16).strip()
+
+
+def test_juntar_fluxo_do_llama_e_do_ollama():
+    from mascote.ia import juntar_fluxo
+
+    vistos = []
+    sse = [b'data: {"choices":[{"delta":{"content":"oi"}}]}\n', b"\n", b'data: {"choices":[{"delta":{"content":"\xc3\xaa!"}}]}\n',
+           b'data: {"choices":[{"delta":{}}]}\n', b"data: [DONE]\n"]
+    assert juntar_fluxo(sse, lambda o: o["choices"][0]["delta"].get("content"), vistos.append) == "oiê!"
+    assert vistos == ["oi", "oiê!"]
+    ndjson = [b'{"message":{"content":"tu"}}\n', b'{"message":{"content":"do"},"done":true}\n']
+    assert juntar_fluxo(ndjson, lambda o: o["message"]["content"], lambda t: None) == "tudo"

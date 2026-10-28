@@ -20,6 +20,22 @@ class ErroIA(Exception):
     pass
 
 
+def juntar_fluxo(linhas, pedaco_de, ao_pedaco) -> str:
+    """Lê uma resposta em pedaços (SSE do llama-server ou NDJSON do Ollama), avisando o texto acumulado."""
+    texto = ""
+    for linha in linhas:
+        linha = linha.strip()
+        if linha.startswith(b"data:"):
+            linha = linha[5:].strip()
+        if not linha or linha == b"[DONE]":
+            continue
+        pedaco = pedaco_de(json.loads(linha))
+        if pedaco:
+            texto += pedaco
+            ao_pedaco(texto)
+    return texto
+
+
 class _BASICO(ctypes.Structure):  # JOBOBJECT_BASIC_LIMIT_INFORMATION
     _fields_ = [
         ("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
@@ -92,7 +108,7 @@ class ServidorIA:
             self.log.close()
         self.log = open(pasta_dados() / "llama.log", "wb")
         self.proc = subprocess.Popen(
-            [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", "4096"],
+            [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", "8192"],
             env={**os.environ, "LLAMA_API_KEY": self.senha},  # fora da linha de comando, que outros processos leem
             stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT,  # stdin explícito: exe sem console não tem um
             creationflags=subprocess.CREATE_NO_WINDOW,
@@ -116,13 +132,20 @@ class ServidorIA:
         self.desligar()
         raise ErroIA("o servidor de IA demorou demais pra ligar")
 
-    def perguntar(self, mensagens: list[dict], max_tokens: int = 512, temperatura: float = 0.7) -> str:
+    def perguntar(self, mensagens: list[dict], max_tokens: int = 512, temperatura: float = 0.7,
+                  esquema: dict | None = None, ao_pedaco=None) -> str:
         with self.trava:
             self.garantir_ligado()
-            corpo = json.dumps({"messages": mensagens, "max_tokens": max_tokens, "temperature": temperatura}).encode()
+            pedido = {"messages": mensagens, "max_tokens": max_tokens, "temperature": temperatura, "stream": bool(ao_pedaco)}
+            if esquema:
+                pedido["response_format"] = {"type": "json_schema", "json_schema": {"name": "resposta", "schema": esquema}}
+            corpo = json.dumps(pedido).encode()
             try:
                 with urllib.request.urlopen(self._pedido("/v1/chat/completions", corpo), timeout=180) as r:
-                    resposta = json.load(r)["choices"][0]["message"]["content"]
+                    if ao_pedaco:
+                        resposta = juntar_fluxo(r, lambda o: (o.get("choices") or [{}])[0].get("delta", {}).get("content"), ao_pedaco)
+                    else:
+                        resposta = json.load(r)["choices"][0]["message"]["content"]
             except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError) as e:
                 raise ErroIA(f"falha ao perguntar: {e}") from e
             finally:
@@ -156,14 +179,19 @@ class ClienteOllama:
         except (OSError, ValueError, KeyError) as e:
             raise ErroIA(f"não achei o Ollama: {e}") from e
 
-    def perguntar(self, mensagens: list[dict], max_tokens: int = 512, temperatura: float = 0.7) -> str:
-        corpo = json.dumps({
-            "model": self.modelo, "messages": mensagens, "stream": False, "keep_alive": self.manter,
-            "options": {"temperature": temperatura, "num_predict": max_tokens, "num_ctx": 4096},
-        }).encode()
-        pedido = urllib.request.Request(f"{self.url}/api/chat", corpo, {"Content-Type": "application/json"})
+    def perguntar(self, mensagens: list[dict], max_tokens: int = 512, temperatura: float = 0.7,
+                  esquema: dict | None = None, ao_pedaco=None) -> str:
+        dados = {
+            "model": self.modelo, "messages": mensagens, "stream": bool(ao_pedaco), "keep_alive": self.manter,
+            "options": {"temperature": temperatura, "num_predict": max_tokens, "num_ctx": 8192},
+        }
+        if esquema:
+            dados["format"] = esquema
+        pedido = urllib.request.Request(f"{self.url}/api/chat", json.dumps(dados).encode(), {"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(pedido, timeout=180) as r:
+                if ao_pedaco:
+                    return juntar_fluxo(r, lambda o: o.get("message", {}).get("content"), ao_pedaco)
                 return json.load(r)["message"]["content"]
         except urllib.error.HTTPError as e:
             raise ErroIA(f"o Ollama recusou ({e.code}): o modelo {self.modelo} está instalado nele?") from e
@@ -188,15 +216,20 @@ class PonteIA(QObject):
 
     pronto = Signal(str, object)
     falhou = Signal(str, object)
+    pedaco = Signal(str, object)  # texto acumulado até agora, quando pedido com fluxo
 
     def __init__(self, servidor: ServidorIA):
         super().__init__()
         self.servidor = servidor
 
-    def pedir(self, mensagens: list[dict], etiqueta: object, max_tokens: int = 512, temperatura: float = 0.7) -> None:
+    def pedir(self, mensagens: list[dict], etiqueta: object, max_tokens: int = 512, temperatura: float = 0.7,
+              esquema: dict | None = None, fluxo: bool = False) -> None:
         def trabalho():
             try:
-                self.pronto.emit(self.servidor.perguntar(mensagens, max_tokens, temperatura), etiqueta)
+                extra = {"esquema": esquema} if esquema else {}
+                if fluxo:
+                    extra["ao_pedaco"] = lambda texto: self.pedaco.emit(texto, etiqueta)
+                self.pronto.emit(self.servidor.perguntar(mensagens, max_tokens, temperatura, **extra), etiqueta)
             except Exception as e:  # qualquer falha vira cara triste, nunca "pensando" pra sempre
                 self.falhou.emit(str(e), etiqueta)
 

@@ -143,3 +143,54 @@ def test_resposta_do_chat_reabre_o_balao_se_fechou(mascote, monkeypatch):
     assert mascote.balao.modo == "chat" and mascote.balao.isVisible()
     mascote.conversa_nova()
     assert mascote.historico == []
+
+
+def test_resposta_chega_aos_poucos_sem_mostrar_a_memoria(mascote, monkeypatch):
+    from PySide6.QtWidgets import QLabel
+
+    monkeypatch.setattr(mascote.ia, "pedir", lambda *a, **kw: None)
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.abrir_chat()
+    mascote.enviou("meu nome é Ana")
+    mascote.ia_escrevendo("prazer, A", ("chat",))
+    mascote.ia_escrevendo("prazer, Ana! 😄\nMEMO", ("chat",))
+    mascote.ia_escrevendo("prazer, Ana! 😄\nMEMORIA: O nome", ("chat",))
+    assert mascote.balao.rascunho.text() == "prazer, Ana! 😄"
+    mascote.ia_respondeu("prazer, Ana! 😄\nMEMORIA: O nome do usuário é Ana", ("chat",))
+    textos = [l.text() for l in mascote.balao.findChildren(QLabel)]
+    assert textos.count("prazer, Ana! 😄") == 1 and mascote.balao.rascunho is None
+
+
+def test_bom_dia_uma_vez_por_dia_e_pausa_depois_de_muito_uso(mascote):
+    from PySide6.QtWidgets import QLabel
+
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.checar()
+    assert mascote.balao.findChildren(QLabel)[-1].text().startswith(("bom dia", "boa tarde", "boa noite"))
+    mascote.balao.fechar()
+    mascote.checar()
+    assert not mascote.balao.isVisible()  # já deu bom dia hoje
+    mascote.ativo_desde -= modulo_app.PAUSA_S + 1
+    mascote.checar()
+    assert "pausa" in mascote.balao.findChildren(QLabel)[-1].text()
+
+
+def test_esconder_segura_o_pet_ate_mandar_aparecer(mascote):
+    mascote.checar()
+    mascote.escondido = True
+    mascote.checar()
+    assert not mascote.pet.isVisible()
+    mascote.alternar_escondido()
+    assert mascote.pet.isVisible() and mascote.balao.modo == "lembrete"
+
+
+def test_passeio_volta_pro_canto_quando_o_balao_abre(mascote):
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.pet.show()
+    canto = mascote.pet.pos()
+    mascote.pet.passear()
+    mascote.pet.passeio = (mascote.pet.passeio[0] - modulo_app.random.random() - 2, mascote.pet.passeio[1])  # meio do caminho
+    mascote.pet.passo()
+    assert mascote.pet.pos() != canto
+    mascote.abrir_chat()
+    assert mascote.pet.pos() == canto and mascote.pet.passeio is None

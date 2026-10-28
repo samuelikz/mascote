@@ -40,3 +40,15 @@ def test_repetido_comeca_no_primeiro_dia_valido_da_regra():
 
     agora = datetime(2026, 10, 27, 22, 0)  # terça
     assert ajustar_quando(datetime(2026, 10, 28, 9), {"tipo": "semanal", "dias": [4]}, agora) == datetime(2026, 10, 30, 9)
+
+
+def test_saudacao_e_filtro_de_traducao():
+    from mascote.app import saudacao, sem_emoji, vale_traduzir
+
+    assert saudacao(datetime(2026, 10, 28, 8), ["almoço às 12h"]) == "bom dia! ☀️ hoje tem: almoço às 12h"
+    assert saudacao(datetime(2026, 10, 28, 20), []).startswith("boa noite!")
+    assert vale_traduzir("Could we move the meeting to Friday afternoon?")
+    assert not vale_traduzir("você pode mudar a reunião pra sexta?")
+    assert not vale_traduzir("https://github.com/samuelikz/mascote/releases")
+    assert not vale_traduzir("for (int i = 0; i < n; i++) { total += i; }")
+    assert sem_emoji("eba! ✅ bora 🍔") == "eba!  bora"

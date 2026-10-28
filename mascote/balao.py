@@ -50,13 +50,15 @@ class Balao(QWidget):
         self.chat_lista: QVBoxLayout | None = None
         self.chat_rolagem: QScrollArea | None = None
         self.entrada: QLineEdit | None = None
+        self.rascunho: QLabel | None = None  # resposta do chat que ainda está chegando
+        self.copiado = ""  # último texto que o botão copiar pôs na área de transferência
 
     # ---- montagem ----
     def _limpar(self, modo: str) -> None:
         self.sumir.stop()
         self.modo = modo
         self.cartao.setMinimumWidth(0)
-        self.chat_lista = self.chat_rolagem = self.entrada = None
+        self.chat_lista = self.chat_rolagem = self.entrada = self.rascunho = None
         while self.corpo.count():
             item = self.corpo.takeAt(0)
             if item.widget():
@@ -68,8 +70,7 @@ class Balao(QWidget):
         rotulo = QLabel(texto, objectName=nome, wordWrap=True, textFormat=Qt.PlainText)
         rotulo.setMaximumWidth(LARGURA_TEXTO)
         # sem largura mínima, o Qt espreme texto quebrável numa coluna estreita
-        natural = max((QFontMetrics(FONTE).horizontalAdvance(l) for l in texto.splitlines() or [""]), default=0) + 20
-        rotulo.setMinimumWidth(min(natural, LARGURA_TEXTO))
+        rotulo.setMinimumWidth(min(_natural(texto), LARGURA_TEXTO))
         if selecionavel:
             rotulo.setTextInteractionFlags(Qt.TextSelectableByMouse)
         return rotulo
@@ -131,7 +132,8 @@ class Balao(QWidget):
         self._ajustar_rolagem(rolagem, 40)
         linha = QHBoxLayout()
         copiar = QPushButton("copiar 📋", cursor=Qt.PointingHandCursor)
-        copiar.clicked.connect(lambda: (QGuiApplication.clipboard().setText(texto), copiar.setText("copiado! ✅")))
+        copiar.clicked.connect(lambda: (setattr(self, "copiado", texto), QGuiApplication.clipboard().setText(texto),
+                                        copiar.setText("copiado! ✅")))
         fechar = QPushButton("fechar", cursor=Qt.PointingHandCursor)
         fechar.clicked.connect(self.fechar)
         linha.addWidget(copiar)
@@ -161,9 +163,9 @@ class Balao(QWidget):
         if ativar:
             self.entrada.setFocus()
 
-    def acrescentar_chat(self, papel: str, texto: str) -> None:
+    def acrescentar_chat(self, papel: str, texto: str) -> QLabel | None:
         if self.chat_lista is None:
-            return
+            return None
         rotulo = self._texto(texto, "eu" if papel == "user" else "pet", selecionavel=True)
         rotulo.setMaximumWidth(LARGURA_TEXTO - 60)
         rotulo.setMinimumWidth(min(rotulo.minimumWidth(), LARGURA_TEXTO - 60))
@@ -178,6 +180,29 @@ class Balao(QWidget):
         if self.isVisible():
             self._mostrar()  # cresceu: reposiciona pra não sair da tela
         QTimer.singleShot(30, lambda: self.chat_rolagem and self.chat_rolagem.verticalScrollBar().setValue(10**6))
+        return rotulo
+
+    def escrever_rascunho(self, texto: str) -> None:
+        """Resposta chegando aos poucos: a primeira parte cria a bolha, as seguintes só trocam o texto."""
+        if self.chat_lista is None:
+            return
+        if self.rascunho is None:
+            self.rascunho = self.acrescentar_chat("assistant", texto)
+            return
+        self.rascunho.setText(texto)
+        self.rascunho.setMinimumWidth(min(_natural(texto), LARGURA_TEXTO - 60))
+        self._ajustar_rolagem(self.chat_rolagem, 160)
+        if self.isVisible():
+            self._mostrar()
+        self.chat_rolagem.verticalScrollBar().setValue(10**6)
+
+    def fechar_rascunho(self, texto: str) -> bool:
+        """Troca o rascunho pelo texto final; False se não havia rascunho (aí quem chamou acrescenta)."""
+        if self.rascunho is None:
+            return False
+        self.escrever_rascunho(texto)
+        self.rascunho = None
+        return True
 
     def _enviar(self) -> None:
         texto = self.entrada.text().strip()
@@ -228,7 +253,7 @@ class Balao(QWidget):
         if dica.width() > self.width() or dica.height() > self.height():
             self.resize(dica.expandedTo(self.size()))
         x = pet_geo.right() - self.width() if canto.endswith("dir") else pet_geo.left()
-        y = pet_geo.top() - self.height() + 18 if canto.startswith("inf") else pet_geo.bottom() - 10
+        y = pet_geo.top() - self.height() + 48 if canto.startswith("inf") else pet_geo.bottom() - 10  # 30 px do topo do pet são folga
         x = max(area.left(), min(x, area.right() - self.width()))
         y = max(area.top(), min(y, area.bottom() - self.height()))
         if (x, y) != (self.x(), self.y()):
@@ -238,6 +263,10 @@ class Balao(QWidget):
         super().resizeEvent(ev)
         if self.isVisible():
             self.posicionar(self.pet_geo, self.canto)  # cresceu depois de aberto: puxa de volta pra dentro da tela
+
+
+def _natural(texto: str) -> int:
+    return max((QFontMetrics(FONTE).horizontalAdvance(l) for l in texto.splitlines() or [""]), default=0) + 20
 
 
 def _apagar_layout(layout) -> None:

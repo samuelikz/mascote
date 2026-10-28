@@ -4,7 +4,10 @@ import sys
 from pathlib import Path
 
 
-PADROES = {"canto": "inf_dir", "ultima_comida": None, "almoco": "12:00"}
+PADROES = {
+    "canto": "inf_dir", "ultima_comida": None, "almoco": "12:00", "bom_dia": None,
+    "iniciativa": True, "voz": False, "area_transferencia": False, "cor": "verde", "acessorio": "nenhum",
+}
 
 
 def identidade() -> str:

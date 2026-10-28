@@ -3,10 +3,28 @@ import re
 import unicodedata
 from datetime import datetime, timedelta
 
-LIMITE = 6000
-ORCAMENTO = 9000  # caracteres por pedido de chat (~2300 tokens): cabe no contexto 4096 com folga pra resposta
-LIMITE_MEMORIAS = 2000
+LIMITE = 10000  # ~2900 tokens: com a resposta de até 4096, cabe no contexto 8192
+ORCAMENTO = 20000  # caracteres por pedido de chat (~5500 tokens): cabe no contexto 8192 com folga pra resposta
+LIMITE_MEMORIAS = 3000
 SIGLAS = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"]
+# a IA é obrigada a responder neste formato (gramática do llama-server / "format" do Ollama)
+ESQUEMA_LEMBRETE = {
+    "type": "object",
+    "properties": {
+        "texto": {"type": "string"},
+        "quando": {"type": ["string", "null"]},
+        "repete": {"anyOf": [{"type": "null"}, {
+            "type": "object",
+            "properties": {
+                "tipo": {"enum": ["diario", "semanal", "mensal"]},
+                "dias": {"type": "array", "items": {"enum": SIGLAS}},
+                "dia": {"type": "integer"},
+            },
+            "required": ["tipo"],
+        }]},
+    },
+    "required": ["texto", "quando", "repete"],
+}
 PALAVRAS_PT = set(
     "não nao você voce vc pra com tudo oi olá ola está tá eu meu minha isso muito obrigado obrigada também tambem "
     "um uma é ou mas sim quero queria pode bom boa então entao aqui agora gente vou vai ser tem".split()
@@ -42,13 +60,25 @@ def _pedido(instrucao: str, texto: str) -> list[dict]:
     return [{"role": "user", "content": f"{instrucao}\n\n{truncar(texto)}"}]
 
 
+def _palavras(texto: str) -> set[str]:
+    return set(re.findall(r"[a-zà-ú0-9]{4,}", texto.lower()))
+
+
+def escolher_memorias(memorias: list[str], pergunta: str, limite: int = LIMITE_MEMORIAS) -> list[str]:
+    """As que têm palavras em comum com a pergunta primeiro, depois as mais novas; voltam na ordem original."""
+    alvo = _palavras(pergunta)
+    ordem = sorted(range(len(memorias)), key=lambda i: (-len(_palavras(memorias[i]) & alvo), -i))
+    escolhidas, total = [], 0
+    for i in ordem:
+        if total + len(memorias[i]) <= limite:
+            escolhidas.append(i)
+            total += len(memorias[i])
+    return [memorias[i] for i in sorted(escolhidas)]
+
+
 def mensagens_chat(historico: list[dict], memorias: list[str], agora: datetime, nome: str = "Mascote") -> list[dict]:
-    linhas = []
-    for m in reversed(memorias):  # as mais novas primeiro, até o limite
-        if sum(len(l) for l in linhas) + len(m) > LIMITE_MEMORIAS:
-            break
-        linhas.insert(0, f"- {m}")
-    lembrancas = "\n".join(linhas) or "- (nada ainda)"
+    pergunta = historico[-1]["content"] if historico else ""
+    lembrancas = "\n".join(f"- {m}" for m in escolher_memorias(memorias, pergunta)) or "- (nada ainda)"
     cabeca = f"{PERSONALIDADE.replace('{nome}', nome)}\n\n{_agora(agora)}\nO que você lembra do usuário:\n{lembrancas}\n\n---\n\n"
     recentes, total = [], len(cabeca)
     for m in reversed(historico[-12:]):  # da mais nova pra trás, enquanto couber

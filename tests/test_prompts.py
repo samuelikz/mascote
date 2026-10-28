@@ -23,8 +23,8 @@ def test_extracao_semanal():
 
 def test_texto_gigante_truncado():  # Review Focus 5
     msgs = mensagens_melhorar("a" * 50_000)
-    assert len(msgs[-1]["content"]) < 8000
-    assert len(mensagens_extrair("a" * 50_000, AGORA)[-1]["content"]) < 8000
+    assert len(msgs[-1]["content"]) < 12000  # LIMITE cabe no contexto 8192 com a resposta
+    assert len(mensagens_extrair("a" * 50_000, AGORA)[-1]["content"]) < 12000
 
 
 def test_chat_sem_role_system_e_com_memorias():
@@ -90,10 +90,20 @@ def test_quando_com_fuso_vira_hora_local_sem_fuso():  # revisão #7
 def test_chat_cabe_no_contexto_mesmo_com_memorias_e_historico_enormes():  # revisão #3
     hist = [{"role": "user" if i % 2 == 0 else "assistant", "content": "a" * 6000} for i in range(11)]
     msgs = mensagens_chat(hist, ["m" * 6000] * 10, AGORA)
-    assert sum(len(m["content"]) for m in msgs) <= 12000
+    assert sum(len(m["content"]) for m in msgs) <= 24000  # ~6500 tokens: cabe no contexto 8192
     assert msgs[0]["role"] == "user" and msgs[-1]["role"] == "user" and msgs[-1]["content"].endswith("a" * 6000)
 
 
 def test_chat_usa_o_nome_escolhido_no_instalador():
     msgs = mensagens_chat([{"role": "user", "content": "qual seu nome?"}], [], AGORA, nome="Bolinha")
     assert "Você é o Bolinha" in msgs[0]["content"] and "Mascote" not in msgs[0]["content"]
+
+
+def test_memorias_relevantes_vem_primeiro_e_cabem_no_limite():
+    from mascote.prompts import escolher_memorias
+
+    memorias = [f"fato velho {i} " + "x" * 90 for i in range(50)] + ["O usuário trabalha com Python"]
+    escolhidas = escolher_memorias(memorias, "me ajuda com um erro em python", limite=300)
+    assert "O usuário trabalha com Python" in escolhidas
+    assert sum(map(len, escolhidas)) <= 300
+    assert escolher_memorias(["a", "b"], "") == ["a", "b"]  # ordem original

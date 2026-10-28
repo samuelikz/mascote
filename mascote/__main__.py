@@ -8,6 +8,11 @@ from .config import pasta_dados
 
 
 def main() -> int:
+    if "--claude" in sys.argv:  # chamado pelos hooks do Claude Code: só avisa o pet aberto e sai
+        from .claude import gravar_evento
+
+        gravar_evento(sys.argv[sys.argv.index("--claude") + 1] if sys.argv[-1] != "--claude" else "")
+        return 0
     if "--baixar-modelo" in sys.argv:  # chamado pelo instalador
         from .baixar_ui import baixar_com_janela
         from .config import preferencias

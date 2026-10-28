@@ -21,6 +21,9 @@ Mascote: a Windows-only desktop pet (PySide6) that sits in a screen corner, with
 - `atualizar.py` / `atualizar_ui.py`: checks GitHub releases for a newer version than `versao.VERSAO` and runs the new installer.
 - Storage (`config.py`): JSON files in `%LOCALAPPDATA%\<identidade>\dados` (reminders via `agenda.py`, memories via `memoria.py`); preferences in the registry `HKCU\Software\<identidade>`. `identidade()` derives from the install folder name so the test install ("MascoteTeste") never mixes with the real one.
 - `janelas.py`: Win32 ctypes helpers (fullscreen detection, idle seconds).
+- `claude.py`: optional Claude Code integration — merges hooks into `~/.claude/settings.json` that run `Mascote.exe --claude <evento>`; that writes `claude.txt` in the data dir, which `App` watches (`QFileSystemWatcher`).
+- Chat replies stream (`PonteIA.pedaco` → `Balao.escrever_rascunho`); reminder extraction is constrained by `prompts.ESQUEMA_LEMBRETE` (llama-server `response_format` / Ollama `format`). Context is 8192 tokens; `prompts.LIMITE`/`ORCAMENTO` are sized for it.
+- On/off features (iniciativa, voz, area_transferencia) and appearance (cor, acessorio) are keys in `config.PADROES` (config.json), toggled from the Ajustes menu; the tray icon is the way back from "Esconder" and "Modo fantasma".
 
 ## Testing notes
 

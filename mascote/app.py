@@ -1,26 +1,36 @@
+import random
 import re
 import threading
 import time
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtWidgets import QApplication, QInputDialog, QMenu
+from PySide6.QtCore import QFileSystemWatcher, QLocale, QObject, QTimer, Signal
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon
+from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QSystemTrayIcon
 
-from . import atualizar, config, memoria
+from . import atualizar, claude, config, memoria
 from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
 from .baixar import ia_instalada
 from .ia import ClienteOllama, PonteIA, criar_ia
 from .janelas import segundos_ocioso, tela_cheia
-from .pet import Pet
+from .pet import ACESSORIOS, CORES, Pet
 from .prompts import (
-    conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar, mensagens_traduzir, separar_memoria, truncar,
+    ESQUEMA_LEMBRETE, LIMITE, conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar,
+    mensagens_traduzir, parece_portugues, separar_memoria,
 )
 
 DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
 FOME_HORAS = 4
 COCHILO_S = 600
+PAUSA_S = 90 * 60  # tempo de uso sem parar até sugerir uma pausa
+PARADA_S = 300  # ociosidade que conta como pausa feita
 LIMITE_MEMORIA = 500  # caracteres por item guardado; o chat leva as memórias em todo pedido
+OPCOES = {  # liga/desliga do menu Ajustes: chave no config.json, rótulo
+    "iniciativa": "Puxar conversa sozinho 💬",
+    "voz": "Falar em voz alta 🔊",
+    "area_transferencia": "Oferecer tradução do que eu copiar 📋",
+}
 
 
 def escolher_fala_lembrete(l: Lembrete) -> str:
@@ -57,7 +67,22 @@ def descrever_quando(quando: datetime, regra: dict | None, agora: datetime) -> s
 
 def parametros(tipo: str) -> tuple[float, int]:
     """(temperatura, max_tokens): JSON e texto pronto pedem resposta firme; texto pronto precisa de espaço."""
-    return {"lembrar": (0.1, 256), "resultado": (0.3, 2048)}.get(tipo, (0.7, 512))
+    return {"lembrar": (0.1, 256), "resultado": (0.3, 4096)}.get(tipo, (0.7, 512))
+
+
+def saudacao(agora: datetime, hoje: list[str]) -> str:
+    oi = "bom dia! ☀️" if agora.hour < 12 else "boa tarde! 🌤️" if agora.hour < 18 else "boa noite! 🌙"
+    return f"{oi} hoje tem: {', '.join(hoje)}" if hoje else f"{oi} nada marcado pra hoje, dia livre 😄"
+
+
+def vale_traduzir(texto: str) -> bool:
+    """Texto copiado que parece frase em outra língua (não link, não código, não português)."""
+    return (20 <= len(texto) <= LIMITE and "://" not in texto and len(re.findall(r"[A-Za-zÀ-ú]{2,}", texto)) >= 4
+            and not re.search(r"[{};=<>]", texto) and not parece_portugues(texto))
+
+
+def sem_emoji(texto: str) -> str:
+    return re.sub(r"[^\w\s.,!?;:'\"()\-–—…%/]", "", texto).strip()
 
 
 def ajustar_quando(quando: datetime, regra: dict | None, agora: datetime) -> datetime | None:
@@ -80,8 +105,19 @@ class App(QObject):
         self.prefs = config.preferencias()  # nome e IA escolhidos no instalador
         self.servidor = criar_ia(self.prefs)
         self.ia = PonteIA(self.servidor)
-        self.pet = Pet(self.cfg["canto"])
+        self.pet = Pet(self.cfg["canto"], self.cfg["cor"], self.cfg["acessorio"])
         self.balao = Balao()
+        self.escondido = False  # o usuário mandou esconder (volta pela bandeja)
+        self.fantasma = False
+        self.ativo_desde = time.time()
+        self.voz = None  # QTextToSpeech, criado na primeira fala
+        self.bandeja = None
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.bandeja = QSystemTrayIcon(QIcon(self.pet.grab()), self)
+            self.bandeja.setToolTip(self.prefs["Nome"])
+            self.bandeja.activated.connect(self.clicou_bandeja)
+        self.vigia = QFileSystemWatcher(self)
+        self.vigia.fileChanged.connect(self.evento_claude)
         self.historico: list[dict] = []
         self.comida = ""
         self.esperando_quando = ""  # texto de um lembrete que ainda não tem horário
@@ -91,6 +127,8 @@ class App(QObject):
 
         self.ia.pronto.connect(self.ia_respondeu)
         self.ia.falhou.connect(self.ia_falhou)
+        self.ia.pedaco.connect(self.ia_escrevendo)
+        QGuiApplication.clipboard().dataChanged.connect(self.copiou)
         self.pet.clicado.connect(self.abrir_chat)
         self.pet.clique_direito.connect(self.menu)
         self.pet.comeu.connect(self.comeu)
@@ -105,24 +143,52 @@ class App(QObject):
     def iniciar(self) -> None:
         self.agenda.garantir_almoco(self.cfg["almoco"])
         self.pet.show()
-        self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+        if self.bandeja:
+            self.bandeja.show()
+        arquivo = claude.arquivo_evento()
+        if not arquivo.exists():
+            arquivo.write_text("", encoding="utf-8")
+        self.vigia.addPath(str(arquivo))
+        self.posicionar_balao()
         self.relogio.start()
         QTimer.singleShot(1500, self.checar)
         QTimer.singleShot(60_000, lambda: self.verificar_atualizacao(pedido=False))  # confere sozinho ao abrir
 
     # ---- fala ----
+    def posicionar_balao(self) -> None:
+        self.pet.parar_passeio()  # o balão gruda no canto: o pet volta pra lá antes
+        self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+
+    def livre(self) -> bool:
+        """Nada na tela esperando o usuário: dá pra puxar assunto ou passear."""
+        return self.pet.isVisible() and not self.balao.isVisible() and self.lembrete_na_tela is None
+
+    def falar_alto(self, texto: str) -> None:
+        if not self.cfg["voz"] or not sem_emoji(texto):
+            return
+        if self.voz is None:
+            from PySide6.QtTextToSpeech import QTextToSpeech
+
+            self.voz = QTextToSpeech(self)
+            pt = [l for l in self.voz.availableLocales() if l.language() == QLocale.Portuguese]
+            if pt:
+                self.voz.setLocale(next((l for l in pt if l.territory() == QLocale.Brazil), pt[0]))
+        self.voz.say(sem_emoji(texto))
+
     def dizer(self, texto: str, botoes: list | None = None, ms: int | None = 6000) -> None:
+        self.falar_alto(texto)
         if self.balao.modo == "chat" and self.balao.isVisible() and not botoes:
             self.balao.acrescentar_chat("assistant", texto)
             return
-        self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+        self.posicionar_balao()
         self.balao.falar(texto, botoes or [], ms)
 
     def pedir(self, mensagens: list[dict], etiqueta: tuple) -> None:
         self.pendentes += 1
         self.pet.definir_estado("pensando")
         temperatura, max_tokens = parametros(etiqueta[0])
-        self.ia.pedir(mensagens, etiqueta, max_tokens=max_tokens, temperatura=temperatura)
+        extra = {"esquema": ESQUEMA_LEMBRETE} if etiqueta[0] == "lembrar" else {"fluxo": True} if etiqueta[0] == "chat" else {}
+        self.ia.pedir(mensagens, etiqueta, max_tokens=max_tokens, temperatura=temperatura, **extra)
 
     def _terminou_pedido(self) -> None:
         self.pendentes = max(0, self.pendentes - 1)
@@ -145,7 +211,7 @@ class App(QObject):
     def checar(self) -> None:
         agora = datetime.now()
         self.servidor.desligar_se_ocioso(time.time())
-        if tela_cheia():
+        if tela_cheia() or self.escondido:
             self.pet.hide()
             self.balao.hide()
             return
@@ -160,15 +226,67 @@ class App(QObject):
                 l = vencidos[0]
                 self._mostrar_lembrete(l.id)
                 self.pet.definir_estado("chamando")
-                self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+                self.posicionar_balao()
+                self.falar_alto(escolher_fala_lembrete(l))
                 self.balao.falar(escolher_fala_lembrete(l), [("feito ✅", ("feito", l.id)), ("depois ⏰", ("adiar", l.id))],
                                  None, modo="lembrete")
                 return
+        ocioso = segundos_ocioso()
         if self.pet.estado in ("parado", "fome", "cochilo") and self.lembrete_na_tela is None:
             faminto = agora - datetime.fromisoformat(self.cfg["ultima_comida"]) > timedelta(hours=FOME_HORAS)
-            novo = "cochilo" if segundos_ocioso() > COCHILO_S else "fome" if faminto else "parado"
+            novo = "cochilo" if ocioso > COCHILO_S else "fome" if faminto else "parado"
             if novo != self.pet.estado:
                 self.pet.definir_estado(novo)
+        if ocioso > PARADA_S:
+            self.ativo_desde = time.time()
+        if self.cfg["iniciativa"] and self.livre():
+            self.puxar_assunto(agora)
+        if self.livre() and self.pet.estado == "parado" and random.random() < 0.12:
+            self.pet.passear()  # de vez em quando dá uma voltinha pela borda (~a cada 3 min)
+
+    def puxar_assunto(self, agora: datetime) -> None:
+        if self.cfg["bom_dia"] != agora.date().isoformat():
+            self.cfg["bom_dia"] = agora.date().isoformat()
+            config.salvar(self.cfg)
+            hoje = [("almoço" if l.texto == "ALMOCO" else l.texto) + f" às {_hora(l.proximo)}"
+                    for l in self.agenda.listar() if l.proximo.date() == agora.date() and l.proximo > agora]
+            self.pet.definir_estado("feliz", 2000)
+            self.dizer(saudacao(agora, hoje), ms=10000)
+        elif time.time() - self.ativo_desde > PAUSA_S:
+            self.ativo_desde = time.time()
+            self.pet.definir_estado("chamando", 2000)
+            self.dizer("já faz 1h30 que você tá aí direto… bora uma pausa? 🧘 água, alongar, olhar longe 👀", ms=10000)
+
+    # ---- área de transferência ----
+    def copiou(self) -> None:
+        texto = QGuiApplication.clipboard().text().strip()
+        if not self.cfg["area_transferencia"] or texto == self.balao.copiado or not self.livre() or not vale_traduzir(texto):
+            return
+        self.comida = texto
+        self.dizer("copiou um texto em outra língua 👀 quer que eu traduza?",
+                   [("traduzir 🌎", ("comida", "traduzir")), ("agora não", ("nada", None))])
+        self.balao.sumir.start(10000)  # pergunta com botão, mas não fica pra sempre
+
+    # ---- Claude Code ----
+    def evento_claude(self, caminho: str) -> None:
+        if caminho not in self.vigia.files():
+            self.vigia.addPath(caminho)  # alguns jeitos de gravar trocam o arquivo e o vigia solta
+        try:
+            evento = claude.arquivo_evento().read_text(encoding="utf-8").strip()
+        except OSError:
+            return
+        if not self.pet.isVisible() or self.lembrete_na_tela is not None:
+            return
+        if evento == "pensando" and not self.pendentes:
+            self.pet.definir_estado("pensando", 10 * 60_000)  # se o Claude nunca avisar que acabou, volta sozinho
+        elif evento == "pronto":
+            self.pet.definir_estado("feliz", 2000)
+            if not self.balao.isVisible():
+                self.dizer("o Claude terminou! ✅", ms=4000)
+        elif evento == "chamando":
+            self.pet.definir_estado("chamando", 3000)
+            if not self.balao.isVisible():
+                self.dizer("o Claude Code precisa de você 👀", ms=6000)
 
     # ---- comida ----
     def comeu(self, texto: str) -> None:
@@ -227,7 +345,7 @@ class App(QObject):
     def abrir_chat(self) -> None:
         if self.lembrete_na_tela is not None:
             return  # primeiro responde o lembrete
-        self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+        self.posicionar_balao()
         self.balao.abrir_chat(self.historico)
 
     def enviou(self, texto: str) -> None:
@@ -243,6 +361,12 @@ class App(QObject):
             self.pedir(mensagens_chat(self.historico, fatos, agora, self.prefs["Nome"]), ("chat",))
 
     # ---- respostas da IA ----
+    def ia_escrevendo(self, parcial: str, etiqueta: tuple) -> None:
+        if etiqueta[0] == "chat" and self.balao.modo == "chat" and self.balao.isVisible():
+            visivel = re.split(r"(?im)^\s*MEMORIA:", parcial)[0].strip()  # a linha de memória não aparece nem pela metade
+            if visivel:
+                self.balao.escrever_rascunho(visivel)
+
     def ia_respondeu(self, resposta: str, etiqueta: tuple) -> None:
         self._terminou_pedido()
         tipo = etiqueta[0]
@@ -251,14 +375,16 @@ class App(QObject):
             for f in fatos:
                 memoria.adicionar(f)
             self.historico.append({"role": "assistant", "content": texto})
+            self.falar_alto(texto)
             if self.balao.modo == "chat" and self.balao.isVisible():
-                self.balao.acrescentar_chat("assistant", texto)
+                if not self.balao.fechar_rascunho(texto):
+                    self.balao.acrescentar_chat("assistant", texto)
             elif self.lembrete_na_tela is None:
                 # fechou o chat enquanto eu pensava: reabre com a resposta, sem roubar o foco
-                self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+                self.posicionar_balao()
                 self.balao.abrir_chat(self.historico, ativar=False)
         elif tipo == "resultado":
-            self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+            self.posicionar_balao()
             self.balao.mostrar_resultado(resposta.strip())
         elif tipo == "lembrar":
             self.salvar_lembrete(resposta, etiqueta[1])
@@ -277,7 +403,7 @@ class App(QObject):
             self.esperando_quando = texto
             if not (self.balao.modo == "chat" and self.balao.isVisible()):
                 # a resposta chega segundos depois do clique: abre sem roubar o foco de quem está digitando
-                self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+                self.posicionar_balao()
                 self.balao.abrir_chat(self.historico, ativar=False)
             self.balao.acrescentar_chat("assistant", f"\"{texto}\" pra quando? 🤔")
             return
@@ -311,10 +437,75 @@ class App(QObject):
         ajustes.addAction(f"Horário do almoço ({self.cfg['almoco']})…", self.mudar_almoco)
         ajustes.addAction(f"Meu nome ({self.prefs['Nome']})…", self.mudar_nome)
         ajustes.addAction("Modelo da IA…", self.escolher_ia)
+        visual = ajustes.addMenu("Aparência 🎨")
+        for cor in CORES:
+            a = visual.addAction(f"cor {cor}", lambda c=cor: self.vestir(cor=c))
+            a.setCheckable(True)
+            a.setChecked(cor == self.cfg["cor"])
+        visual.addSeparator()
+        for item in ACESSORIOS:
+            a = visual.addAction(item, lambda i=item: self.vestir(acessorio=i))
+            a.setCheckable(True)
+            a.setChecked(item == self.cfg["acessorio"])
+        ajustes.addSeparator()
+        for chave, rotulo in OPCOES.items():
+            a = ajustes.addAction(rotulo, lambda c=chave: self.alternar(c))
+            a.setCheckable(True)
+            a.setChecked(bool(self.cfg[chave]))
+        a = ajustes.addAction("Integração com o Claude Code 🤖", self.alternar_claude)
+        a.setCheckable(True)
+        a.setChecked(claude.ligado())
         m.addAction(f"Verificar atualizações (v{atualizar.VERSAO})", self.verificar_atualizacao)
         m.addSeparator()
+        if self.bandeja:
+            m.addAction("Aparecer 👀" if self.escondido else "Esconder 🙈 (volta pela bandeja)", self.alternar_escondido)
+            a = m.addAction("Modo fantasma 👻 (clique atravessa; desliga pela bandeja)", self.alternar_fantasma)
+            a.setCheckable(True)
+            a.setChecked(self.fantasma)
         m.addAction("Sair 👋", QApplication.quit)
         m.exec(pos)
+
+    # ---- bandeja e ajustes ----
+    def clicou_bandeja(self, motivo) -> None:
+        if motivo == QSystemTrayIcon.Context:
+            self.menu(QCursor.pos())
+        elif motivo == QSystemTrayIcon.Trigger:
+            self.alternar_escondido()
+
+    def alternar_escondido(self) -> None:
+        self.escondido = not self.escondido
+        if not self.escondido:
+            self.pet.definir_estado("feliz", 1500)
+        self.checar()
+
+    def alternar_fantasma(self) -> None:
+        self.fantasma = not self.fantasma
+        self.pet.fantasma(self.fantasma)
+
+    def alternar(self, chave: str) -> None:
+        self.cfg[chave] = not self.cfg[chave]
+        config.salvar(self.cfg)
+        self.dizer(f"{OPCOES[chave].rstrip(' 💬🔊📋')}: {'ligado ✅' if self.cfg[chave] else 'desligado'}", ms=3000)
+
+    def alternar_claude(self) -> None:
+        querer = not claude.ligado()
+        try:
+            claude.ligar(querer)
+        except (OSError, ValueError) as e:
+            self.pet.definir_estado("triste", 3000)
+            self.dizer(f"não consegui mexer na config do Claude Code 😕 ({e})")
+            return
+        self.dizer("pronto! quando o Claude Code trabalhar eu aviso 🤖 (vale nas próximas sessões dele)" if querer
+                   else "desliguei a integração com o Claude Code", ms=5000)
+
+    def vestir(self, cor: str | None = None, acessorio: str | None = None) -> None:
+        self.cfg["cor"] = cor or self.cfg["cor"]
+        self.cfg["acessorio"] = acessorio or self.cfg["acessorio"]
+        config.salvar(self.cfg)
+        self.pet.vestir(self.cfg["cor"], self.cfg["acessorio"])
+        self.pet.definir_estado("feliz", 1500)
+        if self.bandeja:
+            self.bandeja.setIcon(QIcon(self.pet.grab()))
 
     def conversa_nova(self) -> None:
         self.historico.clear()
@@ -332,11 +523,11 @@ class App(QObject):
              else f"{l.texto} — {descrever_quando(l.proximo if not l.regra else l.original, l.regra, agora)}")
             for l in self.agenda.listar()
         ]
-        self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+        self.posicionar_balao()
         self.balao.mostrar_lista("Lembretes ⏰", itens)
 
     def ver_memorias(self) -> None:
-        self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+        self.posicionar_balao()
         self.balao.mostrar_lista("O que eu lembro de você 🧠", [(("memoria", m["id"]), m["fato"]) for m in memoria.listar()])
 
     def apagar(self, chave: tuple) -> None:

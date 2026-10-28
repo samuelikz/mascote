@@ -9,8 +9,12 @@ from PySide6.QtWidgets import QWidget
 
 Estado = Literal["parado", "pulo", "cochilo", "boca", "pensando", "feliz", "triste", "fome", "chamando"]
 
-COR = QColor("#8fd3a8")
-COR_BORDA = QColor("#5fae7c")
+CORES = {  # nome: (corpo, borda)
+    "verde": ("#8fd3a8", "#5fae7c"), "azul": ("#9cc9f5", "#6a9fd6"), "rosa": ("#f5b3cf", "#d6809f"),
+    "amarelo": ("#f7dc8a", "#d4b14e"), "roxo": ("#c7b3f2", "#9b84d1"),
+}
+ACESSORIOS = ["nenhum", "chapéu", "laço", "óculos"]
+PASSEIO_S = 6.0
 TINTA = QColor("#234")
 LARGURA, ALTURA = 80, 66  # corpo
 OLHOS = [(-15, -38), (15, -38)]  # relativos ao meio da base do corpo
@@ -44,12 +48,12 @@ class Pet(QWidget):
     comeu = Signal(str)
     mudou_canto = Signal(str)
 
-    def __init__(self, canto: str = "inf_dir"):
+    def __init__(self, canto: str = "inf_dir", cor: str = "verde", acessorio: str = "nenhum"):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAcceptDrops(True)
-        self.setFixedSize(120, 120)
+        self.setFixedSize(120, 150)  # folga em cima: pulo + chapéu não cortam
         self.canto = canto
         self.estado: Estado = "parado"
         self.base: Estado = "parado"  # para onde volta quando um estado com tempo acaba (o app põe "chamando" no lembrete)
@@ -61,6 +65,8 @@ class Pet(QWidget):
         self.olhar = [QPointF(0, 0), QPointF(0, 0)]
         self.arraste: QPoint | None = None
         self.arrastou = False
+        self.passeio: tuple[float, float] | None = None  # (início, distância): vai e volta pela borda da tela
+        self.vestir(cor, acessorio)
         self.encaixar()
         self.relogio = QTimer(self, interval=33, timeout=self.passo)
         self.relogio.start()
@@ -72,6 +78,38 @@ class Pet(QWidget):
 
     def encaixar(self) -> None:
         self.move(posicao_do_canto(self.canto, self.area(), self.size()))
+
+    def vestir(self, cor: str, acessorio: str) -> None:
+        corpo, borda = CORES.get(cor, CORES["verde"])
+        self.cor, self.cor_borda = QColor(corpo), QColor(borda)
+        self.acessorio = acessorio if acessorio in ACESSORIOS else "nenhum"
+        self.update()
+
+    def fantasma(self, sim: bool) -> None:
+        """Modo fantasma: o clique atravessa o pet (desliga pela bandeja)."""
+        visivel = self.isVisible()
+        self.setWindowFlag(Qt.WindowTransparentForInput, sim)
+        if visivel:
+            self.show()  # mudar a flag esconde a janela
+
+    def passear(self) -> None:
+        if self.estado == "parado" and self.arraste is None and self.passeio is None:
+            para_dentro = -1 if self.canto.endswith("dir") else 1
+            self.passeio = (time.time(), para_dentro * random.uniform(80, 220))
+
+    def parar_passeio(self) -> None:
+        if self.passeio is not None:
+            self.passeio = None
+            self.encaixar()
+
+    def _andar(self, agora: float) -> None:
+        inicio, dx = self.passeio
+        t = (agora - inicio) / PASSEIO_S
+        if t >= 1 or self.estado != "parado":
+            self.parar_passeio()
+            return
+        destino = posicao_do_canto(self.canto, self.area(), self.size())
+        self.move(destino.x() + int(dx * math.sin(math.pi * t)), destino.y())
 
     def pe(self) -> QPointF:
         """Meio da base do corpo, em coordenadas do widget."""
@@ -97,9 +135,14 @@ class Pet(QWidget):
         agora = time.time()
         if self.estado_ate and agora >= self.estado_ate:
             self.voltar()
+        if self.passeio is not None:
+            self._andar(agora)
         mouse = QPointF(self.mapFromGlobal(QCursor.pos()))
         b = self.pe()
         alvos = [pupila(QPointF(b.x() + ox, b.y() + oy), mouse, 3.2) for ox, oy in OLHOS]
+        if self.passeio is not None:  # olha pra onde está andando
+            indo = math.cos(math.pi * (agora - self.passeio[0]) / PASSEIO_S) * self.passeio[1]
+            alvos = [QPointF(math.copysign(3, indo), 0.5)] * 2
         self.olhar = [o * 0.65 + a * 0.35 for o, a in zip(self.olhar, alvos)]  # olhos deslizam em vez de pular
         perto = math.hypot(mouse.x() - b.x(), mouse.y() - (b.y() - ALTURA / 2)) < 150
         if self.estado == "cochilo" and perto:
@@ -120,6 +163,9 @@ class Pet(QWidget):
             altura = 22 if self.estado != "chamando" else 16
             sy = 1 + 0.12 * math.sin(math.pi * p) - (0.14 if p < 0.15 or p > 0.85 else 0)
             return -altura * math.sin(math.pi * p), 2 - sy, sy
+        if self.passeio is not None:  # passinhos: quica a cada passo
+            passo = abs(math.sin(agora * math.pi * 3))
+            return -5 * passo, 1 + 0.04 * (1 - passo), 1 - 0.04 * (1 - passo)
         if self.estado == "cochilo":
             r = 0.04 * math.sin(agora * 2 * math.pi / 4)
             return 0, 1.06 - r / 2, 0.88 + r
@@ -148,8 +194,8 @@ class Pet(QWidget):
         corpo.cubicTo(meia, -ALTURA * 0.08, meia * 0.6, 0, 0, 0)
         corpo.cubicTo(-meia * 0.6, 0, -meia, -ALTURA * 0.08, -meia, -ALTURA * 0.38)
         corpo.cubicTo(-meia, ponta * 0.55, -meia * 0.25, ponta * 0.8, 0, ponta)
-        p.setPen(QPen(COR_BORDA, 2))
-        p.setBrush(COR)
+        p.setPen(QPen(self.cor_borda, 2))
+        p.setBrush(self.cor)
         p.drawPath(corpo)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(255, 255, 255, 70))
@@ -162,7 +208,37 @@ class Pet(QWidget):
         self._olhos(p, agora, e)
         self._boca(p, e)
         self._extras(p, agora, e)
+        self._acessorio(p)
         p.end()
+
+    def _acessorio(self, p: QPainter) -> None:
+        if self.acessorio == "chapéu":  # chapéu de festa na pontinha
+            p.setPen(QPen(QColor("#c0392b"), 1.5))
+            p.setBrush(QColor("#ff7a6b"))
+            cone = QPainterPath(QPointF(-11, -72))
+            cone.lineTo(0, -104)
+            cone.lineTo(11, -72)
+            cone.quadTo(0, -68, -11, -72)
+            p.drawPath(cone)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#ffd34d"))
+            p.drawEllipse(QPointF(0, -105), 4, 4)
+        elif self.acessorio == "laço":
+            p.setPen(QPen(QColor("#c2185b"), 1.5))
+            p.setBrush(QColor("#ff6fa8"))
+            for lado in (-1, 1):
+                aba = QPainterPath(QPointF(20, -64))
+                aba.lineTo(20 + 11 * lado, -71)
+                aba.lineTo(20 + 11 * lado, -57)
+                aba.closeSubpath()
+                p.drawPath(aba)
+            p.drawEllipse(QPointF(20, -64), 3.5, 3.5)
+        elif self.acessorio == "óculos":
+            p.setPen(QPen(TINTA, 2))
+            p.setBrush(QColor(255, 255, 255, 40))
+            for ox, oy in OLHOS:
+                p.drawEllipse(QPointF(ox, oy), 10, 9)
+            p.drawLine(QPointF(-5, -39), QPointF(5, -39))
 
     def rosto(self) -> Estado:
         """Careta desenhada: igual ao estado, menos quando está sendo arrastado (cara de "uou!")."""
@@ -257,6 +333,7 @@ class Pet(QWidget):
 
     # ---- mouse ----
     def mousePressEvent(self, ev):
+        self.parar_passeio()
         if ev.button() == Qt.LeftButton:
             self.arraste = ev.globalPosition().toPoint() - self.pos()
             self.arrastou = False
