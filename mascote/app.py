@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QInputDialog, QMenu
 from . import config, memoria
 from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
-from .baixar import caminho_modelo
+from .baixar import ia_instalada
 from .ia import ClienteOllama, PonteIA, criar_ia
 from .janelas import segundos_ocioso, tela_cheia
 from .pet import Pet
@@ -260,7 +260,7 @@ class App(QObject):
         self.pet.definir_estado("triste", 4000)
         if isinstance(self.servidor, ClienteOllama):
             self.dizer(f"não tô achando o Ollama 🦙 ele tá aberto? ({self.prefs['ModeloOllama']})")
-        elif not caminho_modelo().is_file():
+        elif not ia_instalada():
             self.dizer("meu cérebro ainda não foi baixado 🧠 (5,4 GB)", [("baixar agora ⬇️", ("baixar", None)), ("depois", ("nada", None))])
         else:
             self.dizer("ai, minha cabecinha falhou 😵 tenta de novo?")

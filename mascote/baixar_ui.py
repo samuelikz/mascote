@@ -4,7 +4,7 @@ import threading
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
-from .baixar import ErroDownload, caminho_modelo, obter_modelo
+from .baixar import ErroDownload, obter_ia
 
 MB = 1024 * 1024
 
@@ -38,7 +38,7 @@ def baixar_com_janela(nome: str) -> bool:
 
     def trabalho():
         try:
-            obter_modelo(caminho_modelo(), ponte.andou.emit, cancelado=cancelar.is_set)
+            obter_ia(ponte.andou.emit, cancelado=cancelar.is_set)
             ponte.acabou.emit("")
         except (ErroDownload, OSError) as e:
             ponte.acabou.emit(str(e) or "falhou")

@@ -3,8 +3,6 @@ import os
 import sys
 from pathlib import Path
 
-PASTA_APP = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
-RECURSOS = PASTA_APP / "recursos"
 
 PADROES = {"canto": "inf_dir", "ultima_comida": None, "almoco": "12:00"}
 

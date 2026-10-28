@@ -2,7 +2,8 @@
 <!--
   Instalador MSI por usuário (sem admin). Telas: boas-vindas → nome → IA → instalar.
   Abrir o .msi de novo (ou Configurações → Aplicativos → Modificar) mostra Alterar / Reparar / Remover.
-  A IA embutida é baixada durante a instalação pelo próprio Mascote.exe (um arquivo de 5,4 GB não cabe num MSI).
+  A IA embutida (llama.cpp + Gemma) é baixada durante a instalação pelo próprio Mascote.exe, da release "ia-v1"
+  do GitHub do projeto: o MSI fica só com o app (um arquivo de 5,4 GB nem caberia num MSI).
 -->
 <?ifndef Teste?><?define Teste = 0 ?><?endif?>
 <?if $(var.Teste) = 1 ?>
@@ -49,14 +50,11 @@
       <RegistrySearch Id="LerIniciar" Root="HKCU" Key="Software\$(var.Chave)" Name="Iniciar" Type="raw" />
     </Property>
     <SetProperty Id="PASTA_MODELO" Value="[LocalAppDataFolder]$(var.Chave)\modelo\" Before="CostInitialize" Sequence="both" />
+    <SetProperty Id="PASTA_LLAMA" Value="[LocalAppDataFolder]$(var.Chave)\llama\" Before="CostInitialize" Sequence="both" />
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramasDir" Name="Programs">
-        <Directory Id="INSTALLFOLDER" Name="$(var.Chave)">
-          <Directory Id="RecursosDir" Name="recursos">
-            <Directory Id="LlamaDir" Name="llama" />
-          </Directory>
-        </Directory>
+        <Directory Id="INSTALLFOLDER" Name="$(var.Chave)" />
       </Directory>
     </StandardDirectory>
 
@@ -70,7 +68,6 @@
           <RegistryValue Name="Iniciar" Type="string" Value="[INICIAR]" />
         </RegistryKey>
         <RemoveFolder Id="RemoverInstall" Directory="INSTALLFOLDER" On="uninstall" />
-        <RemoveFolder Id="RemoverRecursos" Directory="RecursosDir" On="uninstall" />
       </Component>
       <Component Id="AtalhoMenu" Directory="ProgramMenuFolder">
         <Shortcut Id="AtalhoMenuIniciar" Name="$(var.Produto)" Target="[INSTALLFOLDER]Mascote.exe" WorkingDirectory="INSTALLFOLDER" Icon="icone.ico" />
@@ -81,13 +78,12 @@
     <Feature Id="IAEmbutida" Title="IA embutida (Gemma 2 9B)">
       <!-- instalação silenciosa com IA_MODO=ollama: começa desmarcada, mas "Alterar" ainda pode instalar -->
       <Level Value="1000" Condition='IA_MODO = "ollama"' />
-      <Files Directory="LlamaDir" Include="..\recursos\llama\llama-server.exe" />
-      <Files Directory="LlamaDir" Include="..\recursos\llama\*.dll" />
-      <Component Id="ModeloBaixado" Directory="LlamaDir">
+      <!-- llama.cpp e modelo são baixados durante a instalação (release "ia-v1" do GitHub do projeto),
+           não instalados pelo MSI: por isso ele apaga essas pastas explicitamente ao remover -->
+      <Component Id="IABaixada" Directory="INSTALLFOLDER">
         <RegistryValue Root="HKCU" Key="Software\$(var.Chave)" Name="IAEmbutida" Type="integer" Value="1" KeyPath="yes" />
-        <!-- o modelo foi baixado, não instalado: o MSI precisa apagar a pasta dele explicitamente -->
-        <util:RemoveFolderEx On="uninstall" Property="PASTA_MODELO" />
-        <RemoveFolder Id="RemoverLlama" Directory="LlamaDir" On="uninstall" />
+        <util:RemoveFolderEx Id="ApagarModelo" On="uninstall" Property="PASTA_MODELO" />
+        <util:RemoveFolderEx Id="ApagarLlama" On="uninstall" Property="PASTA_LLAMA" />
       </Component>
     </Feature>
 
@@ -155,7 +151,7 @@
         <Control Id="Sub" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="A IA roda no seu PC, sem internet." />
         <Control Id="Modo" Type="RadioButtonGroup" X="25" Y="55" Width="330" Height="76" Property="IA_MODO">
           <RadioButtonGroup Property="IA_MODO">
-            <RadioButton Value="embutida" X="0" Y="0" Width="330" Height="30" Text="IA embutida (Gemma 2 9B). Baixa 5,4 GB durante a instalação, ou copia do Ollama se já estiver lá." />
+            <RadioButton Value="embutida" X="0" Y="0" Width="330" Height="30" Text="IA embutida (Gemma 2 9B). Baixa 5,5 GB do GitHub do projeto durante a instalação (ou copia do Ollama, se já estiver lá)." />
             <RadioButton Value="ollama" X="0" Y="40" Width="330" Height="30" Text="Usar o Ollama já instalado neste PC (não baixa nada)." />
           </RadioButtonGroup>
         </Control>

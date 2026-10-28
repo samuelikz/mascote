@@ -12,8 +12,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from .baixar import caminho_modelo
-from .config import RECURSOS, pasta_dados
+from .baixar import caminho_llama, caminho_modelo
+from .config import pasta_dados
 
 
 class ErroIA(Exception):
@@ -63,7 +63,7 @@ class ServidorIA:
 
     @classmethod
     def padrao(cls, **kw) -> "ServidorIA":
-        return cls(RECURSOS / "llama" / "llama-server.exe", caminho_modelo(), **kw)
+        return cls(caminho_llama(), caminho_modelo(), **kw)
 
     def disponivel(self) -> bool:
         return self.exe.is_file() and self.modelo.is_file()

@@ -24,7 +24,7 @@ def test_processo_que_morre_vira_erro(tmp_path):  # Review Focus 4
     assert not s.ligado
 
 
-@pytest.mark.skipif(not ServidorIA.padrao().disponivel(), reason="recursos/ ausente")
+@pytest.mark.skipif(not ServidorIA.padrao().disponivel(), reason="IA embutida não baixada")
 def test_gemma_de_verdade_responde_e_desliga():
     s = ServidorIA.padrao(ocioso_s=0)
     t = time.time()
@@ -35,7 +35,7 @@ def test_gemma_de_verdade_responde_e_desliga():
     assert not s.ligado
 
 
-@pytest.mark.skipif(not ServidorIA.padrao().disponivel(), reason="recursos/ ausente")
+@pytest.mark.skipif(not ServidorIA.padrao().disponivel(), reason="IA embutida não baixada")
 def test_servidor_recusa_pedido_sem_senha():
     import urllib.error
     import urllib.request
@@ -51,7 +51,7 @@ def test_servidor_recusa_pedido_sem_senha():
         s.desligar()
 
 
-@pytest.mark.skipif(not ServidorIA.padrao().disponivel(), reason="recursos/ ausente")
+@pytest.mark.skipif(not ServidorIA.padrao().disponivel(), reason="IA embutida não baixada")
 def test_servidor_morre_junto_quando_o_pet_e_morto(tmp_path):
     import subprocess
 
