@@ -194,3 +194,23 @@ def test_passeio_volta_pro_canto_quando_o_balao_abre(mascote):
     assert mascote.pet.pos() != canto
     mascote.abrir_chat()
     assert mascote.pet.pos() == canto and mascote.pet.passeio is None
+
+
+def test_atalho_come_o_que_foi_copiado_e_resumir_vira_resultado(mascote, monkeypatch):
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QPushButton
+
+    pedidos = []
+    monkeypatch.setattr(mascote.ia, "pedir", lambda msgs, etiqueta, **kw: pedidos.append((msgs, etiqueta)))
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    QGuiApplication.clipboard().setText("um texto qualquer pra comer")
+    mascote.atalho_comida()
+    assert mascote.comida == "um texto qualquer pra comer"
+    assert any(b.text().startswith("resumir") for b in mascote.balao.findChildren(QPushButton))
+    mascote.escolheu(("comida", "resumir"))
+    assert pedidos[-1][1] == ("resultado",) and "Resuma" in pedidos[-1][0][0]["content"]
+
+
+def test_falas_variam_mas_sao_todas_conhecidas():
+    vistas = {modulo_app.fala("feito") for _ in range(200)}
+    assert len(vistas) > 1 and vistas <= set(modulo_app.FALAS["feito"])

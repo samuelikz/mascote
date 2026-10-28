@@ -1,11 +1,14 @@
 import math
 import random
 import time
+from ctypes import wintypes
 from typing import Literal
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
+
+from .janelas import WM_HOTKEY, registrar_atalho
 
 Estado = Literal["parado", "pulo", "cochilo", "boca", "pensando", "feliz", "triste", "fome", "chamando"]
 
@@ -47,6 +50,8 @@ class Pet(QWidget):
     clique_direito = Signal(QPoint)
     comeu = Signal(str)
     mudou_canto = Signal(str)
+    carinho = Signal()
+    atalho = Signal()  # Ctrl+Alt+M apertado em qualquer programa
 
     def __init__(self, canto: str = "inf_dir", cor: str = "verde", acessorio: str = "nenhum"):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
@@ -66,6 +71,11 @@ class Pet(QWidget):
         self.arraste: QPoint | None = None
         self.arrastou = False
         self.passeio: tuple[float, float] | None = None  # (início, distância): vai e volta pela borda da tela
+        self.carinho_x: float | None = None  # carinho = mouse indo e voltando em cima dele
+        self.carinho_lado = 0
+        self.carinho_viradas: list[float] = []
+        self.coracoes_ate = 0.0
+        self.atalho_ok = False
         self.vestir(cor, acessorio)
         self.encaixar()
         self.relogio = QTimer(self, interval=33, timeout=self.passo)
@@ -151,10 +161,29 @@ class Pet(QWidget):
             self.ultimo_pulo = self.pulo_inicio = agora
         if self.estado == "chamando" and agora - self.pulo_inicio > 0.9:
             self.pulo_inicio = agora
+        self._sentir_carinho(mouse, b, agora)
         if agora >= self.proxima_piscada:
             self.piscar_ate = agora + 0.12
             self.proxima_piscada = agora + random.uniform(2.5, 6)
         self.update()
+
+    def _sentir_carinho(self, mouse: QPointF, b: QPointF, agora: float) -> None:
+        if not (abs(mouse.x() - b.x()) < LARGURA / 2 and -ALTURA * 1.2 < mouse.y() - b.y() < 0) or self.arraste:
+            self.carinho_x = None
+            return
+        if self.carinho_x is not None and abs(mouse.x() - self.carinho_x) > 3:
+            lado = 1 if mouse.x() > self.carinho_x else -1
+            if self.carinho_lado and lado != self.carinho_lado:
+                self.carinho_viradas.append(agora)
+            self.carinho_lado = lado
+        if self.carinho_x is None or abs(mouse.x() - self.carinho_x) > 3:
+            self.carinho_x = mouse.x()
+        self.carinho_viradas = [t for t in self.carinho_viradas if agora - t < 1.5]
+        if len(self.carinho_viradas) >= 4 and self.estado not in ("pensando", "chamando"):
+            self.carinho_viradas.clear()
+            self.coracoes_ate = agora + 2.5
+            self.definir_estado("feliz", 2500)
+            self.carinho.emit()
 
     def _corpo(self, agora: float) -> tuple[float, float, float]:
         """(deslocamento y, escala x, escala y) com respiração e squash & stretch do pulo."""
@@ -324,12 +353,34 @@ class Pet(QWidget):
             gota.quadTo(36, -42 + y, 30, -40 + y)
             gota.quadTo(24, -42 + y, 30, -52 + y)
             p.drawPath(gota)
+        elif e == "feliz" and agora < self.coracoes_ate:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#ff5c8a"))
+            for i, x in enumerate((-30, 32, 0)):
+                t = (agora * 0.8 + i * 0.33) % 1  # coraçõezinhos subindo e sumindo
+                p.setOpacity(1 - t)
+                _coracao(p, QPointF(x + 4 * math.sin(agora * 4 + i), -60 - 30 * t), 5)
+            p.setOpacity(1)
         elif e == "feliz":
             p.setPen(QPen(QColor("#f5b800"), 1.8, Qt.SolidLine, Qt.RoundCap))
             for i, (x, y) in enumerate([(-34, -66), (36, -60), (28, -82)]):
                 r = 2 + 2.5 * abs(math.sin(agora * 5 + i * 2))  # brilhinhos piscando em volta
                 p.drawLine(QPointF(x - r, y), QPointF(x + r, y))
                 p.drawLine(QPointF(x, y - r), QPointF(x, y + r))
+
+    # ---- atalho global ----
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        # cada janela nova (o modo fantasma recria) precisa registrar de novo; repetir na mesma não faz mal
+        self.atalho_ok = registrar_atalho(int(self.winId())) or self.atalho_ok
+
+    def nativeEvent(self, tipo, mensagem):
+        if bytes(tipo) == b"windows_generic_MSG":
+            msg = wintypes.MSG.from_address(int(mensagem))
+            if msg.message == WM_HOTKEY:
+                self.atalho.emit()
+                return True, 0
+        return super().nativeEvent(tipo, mensagem)
 
     # ---- mouse ----
     def mousePressEvent(self, ev):
@@ -377,6 +428,13 @@ class Pet(QWidget):
         self.voltar()
         if texto:
             self.comeu.emit(texto)
+
+
+def _coracao(p: QPainter, c: QPointF, r: float) -> None:
+    caminho = QPainterPath(QPointF(c.x(), c.y() + r))
+    caminho.cubicTo(c.x() - r * 2, c.y() - r * 0.2, c.x() - r * 0.9, c.y() - r * 1.6, c.x(), c.y() - r * 0.5)
+    caminho.cubicTo(c.x() + r * 0.9, c.y() - r * 1.6, c.x() + r * 2, c.y() - r * 0.2, c.x(), c.y() + r)
+    p.drawPath(caminho)
 
 
 if __name__ == "__main__":

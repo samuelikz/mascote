@@ -13,11 +13,11 @@ from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
 from .baixar import ia_instalada
 from .ia import ClienteOllama, PonteIA, criar_ia
-from .janelas import segundos_ocioso, tela_cheia
+from .janelas import ATALHO, administrador, segundos_ocioso, tela_cheia
 from .pet import ACESSORIOS, CORES, Pet
 from .prompts import (
     ESQUEMA_LEMBRETE, LIMITE, conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar,
-    mensagens_traduzir, parece_portugues, separar_memoria,
+    mensagens_resumir, mensagens_traduzir, parece_portugues, separar_memoria,
 )
 
 DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
@@ -31,6 +31,34 @@ OPCOES = {  # liga/desliga do menu Ajustes: chave no config.json, rótulo
     "voz": "Falar em voz alta 🔊",
     "area_transferencia": "Oferecer tradução do que eu copiar 📋",
 }
+
+
+FALAS = {  # várias versões de cada frase, pra ele não soar repetido
+    "nhac": ["Nhac! 😋 o que eu faço com isso?", "hmm, gostoso! 😋 e agora?", "nham nham 😋 o que eu faço com isso?",
+             "chegou comida! 🍽️ o que eu faço?"],
+    "feito": ["eba! ✅", "boa! 🎉", "isso aí! ✅", "mandou bem! 💪"],
+    "guardei": ["guardei! 🧠", "anotado na cabecinha 🧠", "pode deixar, não esqueço 🧠"],
+    "adiar": ["tá bom, te chamo em 10 min ⏰", "beleza, daqui 10 min eu volto ⏰", "ok! mais 10 minutinhos ⏰"],
+    "lembrar": ["Nhac! 😋 vou te lembrar", "anotado! 📌 vou te lembrar", "pode deixar! 📌 te lembro"],
+    "carinho": ["hihi 🥰", "que gostoso 💕", "mais! mais! 🥰", "ronron… 💕"],
+}
+
+
+def fala(chave: str) -> str:
+    return random.choice(FALAS[chave])
+
+
+def ofertas(texto: str) -> list[str]:
+    """O que oferecer pro texto copiado: traduzir (frase em outra língua) e/ou resumir (textão). Código e link, nada."""
+    if not 20 <= len(texto) <= LIMITE or len(re.findall(r"[{};=<>]", texto)) > len(texto) / 100:
+        return []
+    palavras = len(re.findall(r"[A-Za-zÀ-ú]{2,}", texto))
+    acoes = []
+    if palavras >= 4 and "://" not in texto and not parece_portugues(texto):
+        acoes.append("traduzir")
+    if palavras >= 80:
+        acoes.append("resumir")
+    return acoes
 
 
 def escolher_fala_lembrete(l: Lembrete) -> str:
@@ -74,11 +102,6 @@ def saudacao(agora: datetime, hoje: list[str]) -> str:
     oi = "bom dia! ☀️" if agora.hour < 12 else "boa tarde! 🌤️" if agora.hour < 18 else "boa noite! 🌙"
     return f"{oi} hoje tem: {', '.join(hoje)}" if hoje else f"{oi} nada marcado pra hoje, dia livre 😄"
 
-
-def vale_traduzir(texto: str) -> bool:
-    """Texto copiado que parece frase em outra língua (não link, não código, não português)."""
-    return (20 <= len(texto) <= LIMITE and "://" not in texto and len(re.findall(r"[A-Za-zÀ-ú]{2,}", texto)) >= 4
-            and not re.search(r"[{};=<>]", texto) and not parece_portugues(texto))
 
 
 def sem_emoji(texto: str) -> str:
@@ -133,6 +156,9 @@ class App(QObject):
         self.pet.clique_direito.connect(self.menu)
         self.pet.comeu.connect(self.comeu)
         self.pet.mudou_canto.connect(self.mudou_canto)
+        self.pet.carinho.connect(self.ganhou_carinho)
+        self.pet.atalho.connect(self.atalho_comida)
+        self.ultimo_carinho = 0.0
         self.balao.escolheu.connect(self.escolheu)
         self.balao.enviou.connect(self.enviou)
         self.balao.apagar.connect(self.apagar)
@@ -153,6 +179,10 @@ class App(QObject):
         self.relogio.start()
         QTimer.singleShot(1500, self.checar)
         QTimer.singleShot(60_000, lambda: self.verificar_atualizacao(pedido=False))  # confere sozinho ao abrir
+        if administrador():
+            QTimer.singleShot(3000, lambda: self.dizer(
+                "tô rodando como administrador 😬 assim o Windows não me deixa receber texto arrastado. "
+                "me fecha e abre de novo pelo menu Iniciar?", ms=20000))
 
     # ---- fala ----
     def posicionar_balao(self) -> None:
@@ -260,12 +290,34 @@ class App(QObject):
     # ---- área de transferência ----
     def copiou(self) -> None:
         texto = QGuiApplication.clipboard().text().strip()
-        if not self.cfg["area_transferencia"] or texto == self.balao.copiado or not self.livre() or not vale_traduzir(texto):
+        if not self.cfg["area_transferencia"] or texto == self.balao.copiado or not self.livre():
+            return
+        acoes = ofertas(texto)
+        if not acoes:
             return
         self.comida = texto
-        self.dizer("copiou um texto em outra língua 👀 quer que eu traduza?",
-                   [("traduzir 🌎", ("comida", "traduzir")), ("agora não", ("nada", None))])
+        pergunta = {("traduzir",): "copiou um texto em outra língua 👀 quer que eu traduza?",
+                    ("resumir",): "copiou um textão 📄 quer que eu resuma?",
+                    ("traduzir", "resumir"): "copiou um textão em outra língua 👀 traduzo ou resumo?"}[tuple(acoes)]
+        botoes = {"traduzir": ("traduzir 🌎", ("comida", "traduzir")), "resumir": ("resumir 📝", ("comida", "resumir"))}
+        self.dizer(pergunta, [botoes[a] for a in acoes] + [("agora não", ("nada", None))])
         self.balao.sumir.start(10000)  # pergunta com botão, mas não fica pra sempre
+
+    def atalho_comida(self) -> None:
+        texto = QGuiApplication.clipboard().text().strip()
+        self.escondido = False
+        if not self.pet.isVisible() and not tela_cheia():
+            self.pet.show()
+        if texto:
+            self.comeu(texto)
+        else:
+            self.pet.definir_estado("triste", 2000)
+            self.dizer(f"copia um texto e aperta {ATALHO} que eu como 😋", ms=4000)
+
+    def ganhou_carinho(self) -> None:
+        if not self.balao.isVisible() and time.time() - self.ultimo_carinho > 20:
+            self.ultimo_carinho = time.time()
+            self.dizer(fala("carinho"), ms=2500)
 
     # ---- Claude Code ----
     def evento_claude(self, caminho: str) -> None:
@@ -294,10 +346,10 @@ class App(QObject):
         self.cfg["ultima_comida"] = datetime.now().isoformat()
         config.salvar(self.cfg)
         self.pet.definir_estado("feliz", 1500)
-        self.dizer("Nhac! 😋 o que eu faço com isso?", [
+        self.dizer(fala("nhac"), [
             ("lembrar 📌", ("comida", "lembrar")), ("guardar 🧠", ("comida", "guardar")),
             ("melhorar ✨", ("comida", "melhorar")), ("traduzir 🌎", ("comida", "traduzir")),
-            ("engolir 😋", ("comida", "engolir")),
+            ("resumir 📝", ("comida", "resumir")), ("engolir 😋", ("comida", "engolir")),
         ])
 
     def escolheu(self, valor: tuple) -> None:
@@ -322,11 +374,11 @@ class App(QObject):
             self.agenda.feito(dado, agora)
             self._mostrar_lembrete(None)
             self.pet.definir_estado("feliz", 2000)
-            self.dizer("eba! ✅")
+            self.dizer(fala("feito"))
         elif tipo == "adiar":
             self.agenda.adiar(dado, agora)
             self._mostrar_lembrete(None)
-            self.dizer("tá bom, te chamo em 10 min ⏰", ms=3000)
+            self.dizer(fala("adiar"), ms=3000)
         elif dado == "lembrar":
             self.pedir(mensagens_extrair(self.comida, agora), ("lembrar", self.comida))
         elif dado == "engolir":  # só comer, sem guardar nada
@@ -335,11 +387,13 @@ class App(QObject):
         elif dado == "guardar":
             memoria.adicionar(self.comida.strip()[:LIMITE_MEMORIA])
             self.pet.definir_estado("feliz", 2000)
-            self.dizer("guardei! 🧠")
+            self.dizer(fala("guardei"))
         elif dado == "melhorar":
             self.pedir(mensagens_melhorar(self.comida), ("resultado",))
         elif dado == "traduzir":
             self.pedir(mensagens_traduzir(self.comida), ("resultado",))
+        elif dado == "resumir":
+            self.pedir(mensagens_resumir(self.comida), ("resultado",))
 
     # ---- chat ----
     def abrir_chat(self) -> None:
@@ -409,7 +463,7 @@ class App(QObject):
             return
         self.agenda.adicionar(texto, quando, regra)
         self.pet.definir_estado("feliz", 2000)
-        self.dizer(f"Nhac! 😋 vou te lembrar {descrever_quando(quando, regra, agora)}")
+        self.dizer(f"{fala('lembrar')} {descrever_quando(quando, regra, agora)}")
 
     def ia_falhou(self, erro: str, etiqueta: tuple) -> None:
         print("IA falhou:", erro)
@@ -427,6 +481,9 @@ class App(QObject):
         lembretes, memorias = len(self.agenda.listar()), len(memoria.listar())
         m = QMenu()
         m.addAction("Conversar 💬", self.abrir_chat)
+        dica = m.addAction(f"{ATALHO}: me dá o que você copiou 😋" if self.pet.atalho_ok
+                           else f"({ATALHO} está ocupado por outro programa)")
+        dica.setEnabled(False)
         if self.historico:
             m.addAction("Começar conversa nova 🧹", self.conversa_nova)
         m.addSeparator()

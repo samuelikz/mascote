@@ -127,6 +127,12 @@ def parece_portugues(texto: str) -> bool:
     return pontos >= max(1, len(palavras) * 0.1)
 
 
+def mensagens_resumir(texto: str) -> list[dict]:
+    return _pedido(
+        "Resuma o texto abaixo em português do Brasil, em até 5 tópicos curtos com \"- \", só com o que importa. "
+        "Responda SÓ com o resumo, sem comentários.", texto)
+
+
 def mensagens_traduzir(texto: str) -> list[dict]:
     # a Gemma não segue bem "se for X traduza para Y": o código decide a língua
     destino = "inglês" if parece_portugues(texto) else "português do Brasil"
