@@ -1,0 +1,7 @@
+.venv/
+recursos/
+dist/
+build/
+__pycache__/
+.superpowers/
+*.spec
