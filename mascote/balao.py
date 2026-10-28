@@ -60,7 +60,7 @@ class Balao(QWidget):
                 _apagar_layout(item.layout())
 
     def _texto(self, texto: str, nome: str = "", selecionavel: bool = False) -> QLabel:
-        rotulo = QLabel(texto, objectName=nome, wordWrap=True)
+        rotulo = QLabel(texto, objectName=nome, wordWrap=True, textFormat=Qt.PlainText)
         rotulo.setMaximumWidth(LARGURA_MAX - 24)
         if selecionavel:
             rotulo.setTextInteractionFlags(Qt.TextSelectableByMouse)
