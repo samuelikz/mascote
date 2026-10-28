@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Instalador MSI por usuário (sem admin). Telas: boas-vindas → nome → IA → instalar.
+  Abrir o .msi de novo (ou Configurações → Aplicativos → Modificar) mostra Alterar / Reparar / Remover.
+  A IA embutida é baixada durante a instalação pelo próprio Mascote.exe (um arquivo de 5,4 GB não cabe num MSI).
+-->
+<?ifndef Teste?><?define Teste = 0 ?><?endif?>
+<?if $(var.Teste) = 1 ?>
+  <?define Produto = "Mascote Teste" ?><?define Chave = "MascoteTeste" ?><?define Upgrade = "0B6A2C55-7E31-4D8F-9A40-3C1E6F2D9B77" ?>
+<?else?>
+  <?define Produto = "Mascote" ?><?define Chave = "Mascote" ?><?define Upgrade = "F6490E09-0B3C-4962-AF77-5E2009D06ED8" ?>
+<?endif?>
+<!-- Teste=1 gera uma cópia isolada (outro produto, pasta e registro) pra testar sem mexer na instalação real -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="$(var.Produto)" Manufacturer="Samuel" Version="$(var.Versao)" Language="1046" Codepage="65001"
+           UpgradeCode="$(var.Upgrade)" Scope="perUser">
+    <MajorUpgrade DowngradeErrorMessage="Já existe uma versão mais nova do Mascote instalada." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="icone.ico" SourceFile="icone.ico" />
+    <Property Id="ARPPRODUCTICON" Value="icone.ico" />
+    <WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="dialogo.bmp" />
+
+    <!-- A versão antiga (Inno Setup) ficava em %LOCALAPPDATA%\Mascote: as duas juntas brigariam pelos atalhos. -->
+    <Property Id="INNO_ANTIGO">
+      <DirectorySearch Id="BuscaAntigo" Path="[LocalAppDataFolder]Mascote" Depth="0">
+        <FileSearch Name="unins000.exe" />
+      </DirectorySearch>
+    </Property>
+    <?if $(var.Teste) = 0 ?>
+    <Launch Condition="Installed OR NOT INNO_ANTIGO"
+            Message="Encontrei a versão antiga do Mascote. Desinstale ela primeiro (Configurações → Aplicativos → Mascote → Desinstalar). Suas memórias e lembretes ficam guardados." />
+    <?endif?>
+
+    <!-- Escolhas do instalador; na manutenção voltam preenchidas com o que está no registro. -->
+    <Property Id="NOME" Value="Mascote">
+      <RegistrySearch Id="LerNome" Root="HKCU" Key="Software\$(var.Chave)" Name="Nome" Type="raw" />
+    </Property>
+    <Property Id="IA_MODO" Value="embutida">
+      <RegistrySearch Id="LerIA" Root="HKCU" Key="Software\$(var.Chave)" Name="IA" Type="raw" />
+    </Property>
+    <Property Id="MODELO_OLLAMA" Value="gemma2:9b">
+      <RegistrySearch Id="LerModelo" Root="HKCU" Key="Software\$(var.Chave)" Name="ModeloOllama" Type="raw" />
+    </Property>
+    <Property Id="INICIAR" Value="1">
+      <RegistrySearch Id="LerIniciar" Root="HKCU" Key="Software\$(var.Chave)" Name="Iniciar" Type="raw" />
+    </Property>
+    <SetProperty Id="PASTA_MODELO" Value="[LocalAppDataFolder]$(var.Chave)\modelo\" Before="CostInitialize" Sequence="both" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramasDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="$(var.Chave)">
+          <Directory Id="RecursosDir" Name="recursos">
+            <Directory Id="LlamaDir" Name="llama" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Principal" Title="Mascote" AllowAbsent="no" Display="hidden">
+      <Files Directory="INSTALLFOLDER" Include="..\dist\Mascote\**" />
+      <Component Id="Preferencias" Directory="INSTALLFOLDER">
+        <RegistryKey Root="HKCU" Key="Software\$(var.Chave)">
+          <RegistryValue Name="Nome" Type="string" Value="[NOME]" KeyPath="yes" />
+          <RegistryValue Name="IA" Type="string" Value="[IA_MODO]" />
+          <RegistryValue Name="ModeloOllama" Type="string" Value="[MODELO_OLLAMA]" />
+          <RegistryValue Name="Iniciar" Type="string" Value="[INICIAR]" />
+        </RegistryKey>
+        <RemoveFolder Id="RemoverInstall" Directory="INSTALLFOLDER" On="uninstall" />
+        <RemoveFolder Id="RemoverRecursos" Directory="RecursosDir" On="uninstall" />
+      </Component>
+      <Component Id="AtalhoMenu" Directory="ProgramMenuFolder">
+        <Shortcut Id="AtalhoMenuIniciar" Name="$(var.Produto)" Target="[INSTALLFOLDER]Mascote.exe" WorkingDirectory="INSTALLFOLDER" Icon="icone.ico" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.Chave)" Name="AtalhoMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </Feature>
+
+    <Feature Id="IAEmbutida" Title="IA embutida (Gemma 2 9B)">
+      <!-- instalação silenciosa com IA_MODO=ollama: começa desmarcada, mas "Alterar" ainda pode instalar -->
+      <Level Value="1000" Condition='IA_MODO = "ollama"' />
+      <Files Directory="LlamaDir" Include="..\recursos\llama\llama-server.exe" />
+      <Files Directory="LlamaDir" Include="..\recursos\llama\*.dll" />
+      <Component Id="ModeloBaixado" Directory="LlamaDir">
+        <RegistryValue Root="HKCU" Key="Software\$(var.Chave)" Name="IAEmbutida" Type="integer" Value="1" KeyPath="yes" />
+        <!-- o modelo foi baixado, não instalado: o MSI precisa apagar a pasta dele explicitamente -->
+        <util:RemoveFolderEx On="uninstall" Property="PASTA_MODELO" />
+        <RemoveFolder Id="RemoverLlama" Directory="LlamaDir" On="uninstall" />
+      </Component>
+    </Feature>
+
+    <Feature Id="Inicializar" Title="Iniciar com o Windows">
+      <Level Value="1000" Condition='INICIAR &lt;&gt; "1"' />
+      <Component Id="AtalhoInicializar" Directory="StartupFolder">
+        <Shortcut Id="AtalhoInicio" Name="$(var.Produto)" Target="[INSTALLFOLDER]Mascote.exe" WorkingDirectory="INSTALLFOLDER" Icon="icone.ico" />
+        <RegistryValue Root="HKCU" Key="Software\$(var.Chave)" Name="AtalhoInicio" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </Feature>
+
+    <!-- fecha o pet (e com ele o llama-server) antes de atualizar, alterar ou remover -->
+    <?if $(var.Teste) = 0 ?>
+    <util:CloseApplication Id="FecharPet" Target="Mascote.exe" CloseMessage="no" TerminateProcess="0" RebootPrompt="no" />
+    <?endif?>
+
+    <!-- baixa (ou copia do Ollama) o modelo quando a IA embutida está sendo instalada; se falhar, o pet oferece depois -->
+    <CustomAction Id="BaixarModelo" Directory="INSTALLFOLDER" ExeCommand="&quot;[INSTALLFOLDER]Mascote.exe&quot; --baixar-modelo"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="BaixarModelo" Before="InstallFinalize" Condition="(&amp;IAEmbutida = 3) AND NOT (REMOVE ~= &quot;ALL&quot;)" />
+    </InstallExecuteSequence>
+
+    <!-- "Abrir o Mascote agora" no fim -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Abrir o Mascote agora" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <SetProperty Id="WixShellExecTarget" Value="[INSTALLFOLDER]Mascote.exe" Before="CostFinalize" Sequence="ui" />
+    <CustomAction Id="AbrirMascote" DllEntry="WixShellExec" Impersonate="yes" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" />
+
+    <UI Id="MascoteUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Segoe UI" Size="9" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Segoe UI" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Segoe UI" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Dialog Id="NomeDlg" Width="370" Height="270" Title="[ProductName]">
+        <Control Id="Banner" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="Titulo" Type="Text" X="15" Y="6" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Dê um nome ao seu mascote" />
+        <Control Id="Sub" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="É assim que ele vai se chamar e falar de si." />
+        <Control Id="Rotulo" Type="Text" X="25" Y="70" Width="320" Height="15" NoPrefix="yes" Text="Nome do mascote:" />
+        <Control Id="Nome" Type="Edit" X="25" Y="88" Width="320" Height="18" Property="NOME" Text="{40}" />
+        <Control Id="Dica" Type="Text" X="25" Y="114" Width="320" Height="30" NoPrefix="yes" Text="Dá pra mudar depois clicando com o botão direito nele → Mudar meu nome…" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" DisableCondition="NOT NOME" EnableCondition="NOME" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="IADlg" Width="370" Height="270" Title="[ProductName]">
+        <Control Id="Banner" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="Titulo" Type="Text" X="15" Y="6" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Qual cérebro o [NOME] vai usar?" />
+        <Control Id="Sub" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="A IA roda no seu PC, sem internet." />
+        <Control Id="Modo" Type="RadioButtonGroup" X="25" Y="55" Width="330" Height="76" Property="IA_MODO">
+          <RadioButtonGroup Property="IA_MODO">
+            <RadioButton Value="embutida" X="0" Y="0" Width="330" Height="30" Text="IA embutida (Gemma 2 9B). Baixa 5,4 GB durante a instalação, ou copia do Ollama se já estiver lá." />
+            <RadioButton Value="ollama" X="0" Y="40" Width="330" Height="30" Text="Usar o Ollama já instalado neste PC (não baixa nada)." />
+          </RadioButtonGroup>
+        </Control>
+        <Control Id="RotuloModelo" Type="Text" X="42" Y="137" Width="90" Height="15" NoPrefix="yes" Text="Modelo do Ollama:" />
+        <Control Id="Modelo" Type="Edit" X="135" Y="134" Width="190" Height="18" Property="MODELO_OLLAMA" Text="{80}"
+                 DisableCondition='IA_MODO &lt;&gt; "ollama"' EnableCondition='IA_MODO = "ollama"' />
+        <Control Id="Iniciar" Type="CheckBox" X="25" Y="175" Width="320" Height="17" Property="INICIAR" CheckBoxValue="1" Text="Iniciar o [NOME] junto com o Windows" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+          <Publish Event="AddLocal" Value="IAEmbutida" Condition='IA_MODO = "embutida"' Order="1" />
+          <Publish Event="Remove" Value="IAEmbutida" Condition='IA_MODO = "ollama"' Order="2" />
+          <Publish Event="AddLocal" Value="Inicializar" Condition='INICIAR = "1"' Order="3" />
+          <Publish Event="Remove" Value="Inicializar" Condition='INICIAR &lt;&gt; "1"' Order="4" />
+          <!-- em "Alterar", regrava nome/IA no registro -->
+          <Publish Event="Reinstall" Value="Principal" Condition="Installed" Order="5" />
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="6" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="NomeDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+      <Publish Dialog="NomeDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Condition="NOT Installed" />
+      <Publish Dialog="NomeDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Condition="Installed" />
+      <Publish Dialog="NomeDlg" Control="Next" Event="NewDialog" Value="IADlg" />
+      <Publish Dialog="IADlg" Control="Back" Event="NewDialog" Value="NomeDlg" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="IADlg" Order="1" Condition='NOT Installed OR WixUI_InstallMode = "Change"' />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition='Installed AND WixUI_InstallMode &lt;&gt; "Change"' />
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="ChangeButton" Event="NewDialog" Value="NomeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="AbrirMascote" Order="1"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+    </UI>
+    <UIRef Id="WixUI_Common" />
+  </Package>
+</Wix>

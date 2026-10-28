@@ -1,9 +1,8 @@
-# Baixa o llama-server (Vulkan) e copia a Gemma 2 9B do Ollama para recursos\. Pode rodar de novo sem problema.
+# Baixa o llama-server (Vulkan) para recursos\llama. O modelo é baixado pelo instalador (mascote/baixar.py).
 $ErrorActionPreference = "Stop"
 $raiz = Split-Path $PSScriptRoot -Parent
 $llama = Join-Path $raiz "recursos\llama"
-$modelo = Join-Path $raiz "recursos\modelo"
-New-Item -ItemType Directory -Force $llama, $modelo | Out-Null
+New-Item -ItemType Directory -Force $llama | Out-Null
 
 # Versão fixa e conferida. Para atualizar: troque a tag e o SHA-256 (campo "digest" do asset na API do GitHub).
 $tag = "b11941"
@@ -22,14 +21,4 @@ if (-not (Test-Path (Join-Path $llama "llama-server.exe"))) {
     Set-Content (Join-Path $llama "VERSAO.txt") $tag -Encoding utf8
 }
 
-$destino = Join-Path $modelo "gemma2-9b.gguf"
-if (-not (Test-Path $destino)) {
-    $ollama = Join-Path $env:USERPROFILE ".ollama\models"
-    $manifesto = Get-Content (Join-Path $ollama "manifests\registry.ollama.ai\library\gemma2\9b") -Raw | ConvertFrom-Json
-    $digest = ($manifesto.layers | Where-Object { $_.mediaType -eq "application/vnd.ollama.image.model" }).digest
-    $blob = Join-Path $ollama ("blobs\" + $digest.Replace(":", "-"))
-    Write-Host "Copiando modelo de $blob..."
-    Copy-Item $blob $destino
-}
-
-Write-Host "Pronto: $(Get-Content (Join-Path $llama 'VERSAO.txt')) + $([math]::Round((Get-Item $destino).Length/1GB,1)) GB"
+Write-Host "Pronto: llama.cpp $(Get-Content (Join-Path $llama 'VERSAO.txt'))"

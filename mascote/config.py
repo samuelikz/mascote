@@ -36,3 +36,38 @@ def carregar() -> dict:
 
 def salvar(cfg: dict) -> None:
     gravar_json(pasta_dados() / "config.json", cfg)
+
+
+# ---- preferências escolhidas no instalador (HKCU\Software\Mascote) ----
+PREFERENCIAS_PADRAO = {"Nome": "Mascote", "IA": "embutida", "ModeloOllama": "gemma2:9b"}
+
+
+def _chave_registro() -> str:
+    return os.environ.get("MASCOTE_REGISTRO", r"Software\Mascote")
+
+
+def preferencias() -> dict:
+    import winreg
+
+    prefs = dict(PREFERENCIAS_PADRAO)
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _chave_registro()) as chave:
+            for nome in prefs:
+                try:
+                    valor = str(winreg.QueryValueEx(chave, nome)[0]).strip()
+                except OSError:
+                    continue
+                if valor:
+                    prefs[nome] = valor
+    except OSError:
+        pass
+    if prefs["IA"] not in ("embutida", "ollama"):
+        prefs["IA"] = "embutida"
+    return prefs
+
+
+def salvar_preferencia(nome: str, valor: str) -> None:
+    import winreg
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _chave_registro()) as chave:
+        winreg.SetValueEx(chave, nome, 0, winreg.REG_SZ, valor)

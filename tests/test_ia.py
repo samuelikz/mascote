@@ -68,3 +68,41 @@ def test_servidor_morre_junto_quando_o_pet_e_morto(tmp_path):
     if str(filho) in vivos:
         subprocess.run(["taskkill", "/F", "/PID", str(filho)])
     assert str(filho) not in vivos
+
+
+def _ollama_no_ar():
+    import urllib.request
+
+    try:
+        urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=2)
+        return True
+    except OSError:
+        return False
+
+
+def test_ollama_fechado_vira_erro_rapido():
+    from mascote.ia import ClienteOllama
+
+    t = time.time()
+    with pytest.raises(ErroIA, match="Ollama"):
+        ClienteOllama("gemma2:9b", url="http://127.0.0.1:9").perguntar([{"role": "user", "content": "oi"}])
+    assert time.time() - t < 5
+
+
+def test_criar_ia_conforme_preferencias():
+    from mascote.baixar import caminho_modelo
+    from mascote.ia import ClienteOllama, criar_ia
+
+    ia = criar_ia({"IA": "ollama", "ModeloOllama": "dolphin-mistral:latest"})
+    assert isinstance(ia, ClienteOllama) and ia.modelo == "dolphin-mistral:latest"
+    embutida = criar_ia({"IA": "embutida", "ModeloOllama": "x"})
+    assert isinstance(embutida, ServidorIA) and embutida.modelo == caminho_modelo()
+
+
+@pytest.mark.skipif(not _ollama_no_ar(), reason="Ollama não está rodando")
+def test_ollama_de_verdade_lista_modelos_e_responde():
+    from mascote.ia import ClienteOllama
+
+    cliente = ClienteOllama("gemma2:9b", manter="0")  # descarrega logo, pra não brigar por VRAM com o llama-server
+    assert "gemma2:9b" in cliente.modelos()
+    assert cliente.perguntar([{"role": "user", "content": "Responda só: oi"}], max_tokens=16).strip()

@@ -31,3 +31,16 @@ def test_gravacao_interrompida_nao_estraga_o_arquivo(monkeypatch):  # revisão #
         config.gravar_json(config.pasta_dados() / "memorias.json", [{"id": 1, "fato": "importante"}, {"id": 2, "fato": "x"}])
     monkeypatch.setattr(pathlib.Path, "write_text", original)  # undo() desfaria também o MASCOTE_DADOS
     assert config.ler_json(config.pasta_dados() / "memorias.json", []) == [{"id": 1, "fato": "importante"}]
+
+
+def test_preferencias_do_instalador_com_padroes():
+    assert config.preferencias() == {"Nome": "Mascote", "IA": "embutida", "ModeloOllama": "gemma2:9b"}
+    config.salvar_preferencia("Nome", "Bolinha")
+    config.salvar_preferencia("IA", "ollama")
+    config.salvar_preferencia("ModeloOllama", "  ")
+    assert config.preferencias() == {"Nome": "Bolinha", "IA": "ollama", "ModeloOllama": "gemma2:9b"}
+
+
+def test_ia_desconhecida_vira_embutida():
+    config.salvar_preferencia("IA", "qualquer")
+    assert config.preferencias()["IA"] == "embutida"

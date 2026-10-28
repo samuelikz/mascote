@@ -92,3 +92,8 @@ def test_chat_cabe_no_contexto_mesmo_com_memorias_e_historico_enormes():  # revi
     msgs = mensagens_chat(hist, ["m" * 6000] * 10, AGORA)
     assert sum(len(m["content"]) for m in msgs) <= 12000
     assert msgs[0]["role"] == "user" and msgs[-1]["role"] == "user" and msgs[-1]["content"].endswith("a" * 6000)
+
+
+def test_chat_usa_o_nome_escolhido_no_instalador():
+    msgs = mensagens_chat([{"role": "user", "content": "qual seu nome?"}], [], AGORA, nome="Bolinha")
+    assert "Você é o Bolinha" in msgs[0]["content"] and "Mascote" not in msgs[0]["content"]

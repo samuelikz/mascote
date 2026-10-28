@@ -12,6 +12,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
+from .baixar import caminho_modelo
 from .config import RECURSOS, pasta_dados
 
 
@@ -62,7 +63,7 @@ class ServidorIA:
 
     @classmethod
     def padrao(cls, **kw) -> "ServidorIA":
-        return cls(RECURSOS / "llama" / "llama-server.exe", RECURSOS / "modelo" / "gemma2-9b.gguf", **kw)
+        return cls(RECURSOS / "llama" / "llama-server.exe", caminho_modelo(), **kw)
 
     def disponivel(self) -> bool:
         return self.exe.is_file() and self.modelo.is_file()
@@ -138,6 +139,48 @@ class ServidorIA:
             self.proc.wait()
             self.proc = None
             self.senha, self.porta = "", 0
+
+
+class ClienteOllama:
+    """Usa um Ollama já instalado no PC (http://127.0.0.1:11434), com a mesma cara do ServidorIA."""
+
+    ligado = False
+
+    def __init__(self, modelo: str, url: str = "http://127.0.0.1:11434", manter: str = "5m"):
+        self.modelo, self.url, self.manter = modelo, url, manter
+
+    def modelos(self) -> list[str]:
+        try:
+            with urllib.request.urlopen(f"{self.url}/api/tags", timeout=5) as r:
+                return sorted(m["name"] for m in json.load(r)["models"])
+        except (OSError, ValueError, KeyError) as e:
+            raise ErroIA(f"não achei o Ollama: {e}") from e
+
+    def perguntar(self, mensagens: list[dict], max_tokens: int = 512, temperatura: float = 0.7) -> str:
+        corpo = json.dumps({
+            "model": self.modelo, "messages": mensagens, "stream": False, "keep_alive": self.manter,
+            "options": {"temperature": temperatura, "num_predict": max_tokens, "num_ctx": 4096},
+        }).encode()
+        pedido = urllib.request.Request(f"{self.url}/api/chat", corpo, {"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(pedido, timeout=180) as r:
+                return json.load(r)["message"]["content"]
+        except urllib.error.HTTPError as e:
+            raise ErroIA(f"o Ollama recusou ({e.code}): o modelo {self.modelo} está instalado nele?") from e
+        except (OSError, ValueError, KeyError) as e:
+            raise ErroIA(f"não achei o Ollama: {e}") from e
+
+    def desligar_se_ocioso(self, agora: float) -> None:
+        pass  # o próprio Ollama descarrega o modelo
+
+    def desligar(self) -> None:
+        pass
+
+
+def criar_ia(prefs: dict) -> "ServidorIA | ClienteOllama":
+    if prefs["IA"] == "ollama":
+        return ClienteOllama(prefs["ModeloOllama"])
+    return ServidorIA.padrao()
 
 
 class PonteIA(QObject):

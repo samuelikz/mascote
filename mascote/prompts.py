@@ -20,7 +20,7 @@ REPETICAO = re.compile(
 DIAS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
 
 PERSONALIDADE = (
-    "Você é o Mascote, um bichinho virtual fofinho e brincalhão que mora no canto da tela do usuário. "
+    "Você é o {nome}, um bichinho virtual fofinho e brincalhão que mora no canto da tela do usuário. "
     "Fale em português do Brasil, com frases curtas e emoji, tipo \"ei, bora comer? 🍔\". "
     "Quando o usuário pedir para melhorar ou traduzir um texto, entregue o texto pronto e limpo, "
     "sem gracinha dentro dele. "
@@ -42,14 +42,14 @@ def _pedido(instrucao: str, texto: str) -> list[dict]:
     return [{"role": "user", "content": f"{instrucao}\n\n{truncar(texto)}"}]
 
 
-def mensagens_chat(historico: list[dict], memorias: list[str], agora: datetime) -> list[dict]:
+def mensagens_chat(historico: list[dict], memorias: list[str], agora: datetime, nome: str = "Mascote") -> list[dict]:
     linhas = []
     for m in reversed(memorias):  # as mais novas primeiro, até o limite
         if sum(len(l) for l in linhas) + len(m) > LIMITE_MEMORIAS:
             break
         linhas.insert(0, f"- {m}")
     lembrancas = "\n".join(linhas) or "- (nada ainda)"
-    cabeca = f"{PERSONALIDADE}\n\n{_agora(agora)}\nO que você lembra do usuário:\n{lembrancas}\n\n---\n\n"
+    cabeca = f"{PERSONALIDADE.replace('{nome}', nome)}\n\n{_agora(agora)}\nO que você lembra do usuário:\n{lembrancas}\n\n---\n\n"
     recentes, total = [], len(cabeca)
     for m in reversed(historico[-12:]):  # da mais nova pra trás, enquanto couber
         tamanho = len(truncar(m["content"]))

@@ -80,3 +80,24 @@ def test_erro_inesperado_na_ia_vira_falhou():  # revisão #6
         qt.processEvents()
         time.sleep(0.02)
     assert pronto.is_set() and "acesso negado" in falhas[0]
+
+
+def test_app_usa_nome_e_ia_das_preferencias(monkeypatch):
+    from mascote import config
+    from mascote.ia import ClienteOllama
+
+    config.salvar_preferencia("Nome", "Bolinha")
+    config.salvar_preferencia("IA", "ollama")
+    monkeypatch.setattr(modulo_app, "tela_cheia", lambda: False)
+    m = modulo_app.App()
+    pedidos = []
+    monkeypatch.setattr(m.ia, "pedir", lambda msgs, etiqueta, **kw: pedidos.append(msgs))
+    m.enviou("oi")
+    assert isinstance(m.servidor, ClienteOllama)
+    assert "Bolinha" in pedidos[0][0]["content"]
+    m.ia_falhou("não achei o Ollama: recusado", ("chat",))
+    from PySide6.QtWidgets import QLabel
+
+    assert "Ollama" in m.balao.findChildren(QLabel)[-1].text()
+    m.balao.close()
+    m.pet.close()

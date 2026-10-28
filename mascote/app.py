@@ -8,7 +8,8 @@ from PySide6.QtWidgets import QApplication, QInputDialog, QMenu
 from . import config, memoria
 from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
-from .ia import PonteIA, ServidorIA
+from .baixar import caminho_modelo
+from .ia import ClienteOllama, PonteIA, criar_ia
 from .janelas import segundos_ocioso, tela_cheia
 from .pet import Pet
 from .prompts import (
@@ -73,7 +74,8 @@ class App(QObject):
             self.cfg["ultima_comida"] = datetime.now().isoformat()
             config.salvar(self.cfg)
         self.agenda = Agenda(config.pasta_dados() / "agenda.db")
-        self.servidor = ServidorIA.padrao()
+        self.prefs = config.preferencias()  # nome e IA escolhidos no instalador
+        self.servidor = criar_ia(self.prefs)
         self.ia = PonteIA(self.servidor)
         self.pet = Pet(self.cfg["canto"])
         self.balao = Balao()
@@ -93,7 +95,7 @@ class App(QObject):
         self.balao.enviou.connect(self.enviou)
         self.balao.apagar.connect(self.apagar)
         self.balao.fechou.connect(self.balao_fechou)
-        QApplication.instance().aboutToQuit.connect(self.servidor.desligar)
+        QApplication.instance().aboutToQuit.connect(lambda: self.servidor.desligar())
 
     def iniciar(self) -> None:
         self.agenda.garantir_almoco(self.cfg["almoco"])
@@ -162,7 +164,16 @@ class App(QObject):
     def escolheu(self, valor: tuple) -> None:
         tipo, dado = valor
         agora = datetime.now()
-        if tipo == "feito":
+        if tipo == "nada":
+            self.balao.fechar()
+        elif tipo == "baixar":
+            from .baixar_ui import baixar_com_janela
+
+            self.balao.fechar()
+            if baixar_com_janela(self.prefs["Nome"]):
+                self.pet.definir_estado("feliz", 2000)
+                self.dizer("cérebro instalado! 🧠✨ agora sim, fala comigo")
+        elif tipo == "feito":
             self.agenda.feito(dado, agora)
             self.lembrete_na_tela = None
             self.pet.definir_estado("feliz", 2000)
@@ -200,7 +211,7 @@ class App(QObject):
         else:
             self.historico.append({"role": "user", "content": texto})
             fatos = [m["fato"] for m in memoria.listar()]
-            self.pedir(mensagens_chat(self.historico, fatos, agora), ("chat",))
+            self.pedir(mensagens_chat(self.historico, fatos, agora, self.prefs["Nome"]), ("chat",))
 
     # ---- respostas da IA ----
     def ia_respondeu(self, resposta: str, etiqueta: tuple) -> None:
@@ -243,7 +254,12 @@ class App(QObject):
     def ia_falhou(self, erro: str, etiqueta: tuple) -> None:
         print("IA falhou:", erro)
         self.pet.definir_estado("triste", 4000)
-        self.dizer("ai, minha cabecinha falhou 😵 tenta de novo?")
+        if isinstance(self.servidor, ClienteOllama):
+            self.dizer(f"não tô achando o Ollama 🦙 ele tá aberto? ({self.prefs['ModeloOllama']})")
+        elif not caminho_modelo().is_file():
+            self.dizer("meu cérebro ainda não foi baixado 🧠 (5,4 GB)", [("baixar agora ⬇️", ("baixar", None)), ("depois", ("nada", None))])
+        else:
+            self.dizer("ai, minha cabecinha falhou 😵 tenta de novo?")
 
     # ---- menu ----
     def menu(self, pos) -> None:
@@ -251,6 +267,8 @@ class App(QObject):
         m.addAction("Ver lembretes", self.ver_lembretes)
         m.addAction("O que eu lembro de você", self.ver_memorias)
         m.addAction("Horário do almoço…", self.mudar_almoco)
+        m.addAction("Mudar meu nome…", self.mudar_nome)
+        m.addAction("Modelo da IA…", self.escolher_ia)
         m.addSeparator()
         m.addAction("Sair", QApplication.quit)
         m.exec(pos)
@@ -286,6 +304,35 @@ class App(QObject):
             config.salvar(self.cfg)
             self.agenda.garantir_almoco(self.cfg["almoco"])
             self.dizer(f"anotado! almoço às {hora.strip()} 🍔")
+
+    def mudar_nome(self) -> None:
+        nome, ok = QInputDialog.getText(None, self.prefs["Nome"], "Como eu me chamo?", text=self.prefs["Nome"])
+        if ok and nome.strip():
+            self.prefs["Nome"] = nome.strip()[:40]
+            config.salvar_preferencia("Nome", self.prefs["Nome"])
+            self.dizer(f"agora eu sou o {self.prefs['Nome']}! 😄")
+
+    def escolher_ia(self) -> None:
+        embutida = "IA embutida (Gemma 2 9B)"
+        try:
+            do_ollama = [f"Ollama: {m}" for m in ClienteOllama(self.prefs["ModeloOllama"]).modelos()]
+        except Exception:
+            do_ollama = []
+        opcoes = [embutida] + do_ollama
+        atual = embutida if self.prefs["IA"] == "embutida" else f"Ollama: {self.prefs['ModeloOllama']}"
+        escolha, ok = QInputDialog.getItem(None, self.prefs["Nome"], "Qual cérebro eu uso?" + (
+            "" if do_ollama else "\n(não achei o Ollama aberto)"), opcoes, opcoes.index(atual) if atual in opcoes else 0, False)
+        if not ok:
+            return
+        if escolha == embutida:
+            self.prefs["IA"] = "embutida"
+        else:
+            self.prefs["IA"], self.prefs["ModeloOllama"] = "ollama", escolha.removeprefix("Ollama: ")
+            config.salvar_preferencia("ModeloOllama", self.prefs["ModeloOllama"])
+        config.salvar_preferencia("IA", self.prefs["IA"])
+        self.servidor.desligar()
+        self.servidor = self.ia.servidor = criar_ia(self.prefs)
+        self.dizer("pronto, troquei de cérebro! 🧠")
 
     def mudou_canto(self, canto: str) -> None:
         self.cfg["canto"] = canto
