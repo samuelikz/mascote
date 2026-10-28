@@ -89,5 +89,7 @@ def baixar(atu: Atualizacao, progresso: Callable[[int, int], None], cancelado: C
 
 
 def instalar(setup: Path) -> None:
-    """Abre o instalador (pede administrador) em modo silencioso; ele fecha o pet e o reabre no fim."""
-    os.startfile(str(setup), "runas", "/SILENT /SUPPRESSMSGBOXES /NORESTART")
+    """Abre o instalador em modo silencioso; ele fecha o pet e o reabre no fim.
+    Sem "runas": o próprio instalador pede administrador. Aberto já elevado, ele reabriria o pet como
+    administrador, e o Windows bloqueia arrastar texto de programas comuns pra janela de administrador."""
+    os.startfile(str(setup), "open", "/SILENT /SUPPRESSMSGBOXES /NORESTART")

@@ -60,9 +60,11 @@ Root: HKCU; Subkey: "Software\{#Chave}"; ValueType: string; ValueName: "Iniciar"
 [Run]
 ; baixa (ou copia do Ollama) o modelo; se falhar, o pet oferece depois
 Filename: "{app}\Mascote.exe"; Parameters: "--baixar-modelo"; StatusMsg: "Baixando a IA..."; Flags: runasoriginaluser waituntilterminated; Check: IAEmbutida and not WizardSilent
-Filename: "{app}\Mascote.exe"; Description: "Abrir o {#Produto} agora"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; o pet abre pelo explorer.exe, que roda como usuário comum: assim ele nunca herda o administrador do instalador
+; (pet de administrador não recebe texto arrastado nem avisos de outros programas)
+Filename: "{win}\explorer.exe"; Parameters: """{app}\Mascote.exe"""; Description: "Abrir o {#Produto} agora"; Flags: nowait postinstall skipifsilent
 ; atualização pelo próprio pet (modo silencioso): reabre sozinho no fim
-Filename: "{app}\Mascote.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent
+Filename: "{win}\explorer.exe"; Parameters: """{app}\Mascote.exe"""; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Mascote.exe /T"; Flags: runhidden; RunOnceId: "fechar"
