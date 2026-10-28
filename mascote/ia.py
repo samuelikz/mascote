@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import secrets
@@ -11,11 +12,39 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from .config import RECURSOS
+from .config import RECURSOS, pasta_dados
 
 
 class ErroIA(Exception):
     pass
+
+
+class _BASICO(ctypes.Structure):  # JOBOBJECT_BASIC_LIMIT_INFORMATION
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+        ("LimitFlags", ctypes.c_uint32), ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", ctypes.c_uint32),
+        ("Affinity", ctypes.c_size_t), ("PriorityClass", ctypes.c_uint32), ("SchedulingClass", ctypes.c_uint32),
+    ]
+
+
+class _LIMITES(ctypes.Structure):  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    _fields_ = [("BasicLimitInformation", _BASICO), ("IoInfo", ctypes.c_uint64 * 6), ("memoria", ctypes.c_size_t * 4)]
+
+
+def _job_que_mata_ao_fechar():
+    """Job do Windows: quando o pet morre (até por Gerenciador de Tarefas), o llama-server morre junto."""
+    k32 = ctypes.windll.kernel32
+    k32.CreateJobObjectW.restype = ctypes.c_void_p
+    job = k32.CreateJobObjectW(None, None)
+    info = _LIMITES()
+    info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not job or not k32.SetInformationJobObject(ctypes.c_void_p(job), 9, ctypes.byref(info), ctypes.sizeof(info)):
+        return None
+    return job
+
+
+_JOB = _job_que_mata_ao_fechar()
 
 
 class ServidorIA:
@@ -28,6 +57,7 @@ class ServidorIA:
         self.porta = 0
         self.ultimo_uso = 0.0
         self.senha = ""
+        self.log = None
         self.trava = threading.Lock()
 
     @classmethod
@@ -57,11 +87,17 @@ class ServidorIA:
             s.bind(("127.0.0.1", 0))
             self.porta = s.getsockname()[1]
         self.senha = secrets.token_urlsafe(24)  # só este processo conversa com o servidor
+        if self.log is not None:
+            self.log.close()
+        self.log = open(pasta_dados() / "llama.log", "wb")
         self.proc = subprocess.Popen(
             [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", "4096"],
             env={**os.environ, "LLAMA_API_KEY": self.senha},  # fora da linha de comando, que outros processos leem
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
+            stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT,  # stdin explícito: exe sem console não tem um
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        if _JOB:
+            ctypes.windll.kernel32.AssignProcessToJobObject(ctypes.c_void_p(_JOB), ctypes.c_void_p(int(self.proc._handle)))
         limite = time.time() + self.timeout_s
         while time.time() < limite:
             if self.proc.poll() is not None:

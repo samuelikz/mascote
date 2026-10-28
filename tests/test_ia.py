@@ -49,3 +49,22 @@ def test_servidor_recusa_pedido_sem_senha():
         assert erro.value.code == 401
     finally:
         s.desligar()
+
+
+@pytest.mark.skipif(not ServidorIA.padrao().disponivel(), reason="recursos/ ausente")
+def test_servidor_morre_junto_quando_o_pet_e_morto(tmp_path):
+    import subprocess
+
+    codigo = (
+        "import sys; sys.path.insert(0, r'%s'); from mascote.ia import ServidorIA; "
+        "s = ServidorIA.padrao(); s.garantir_ligado(); print(s.proc.pid, flush=True); import time; time.sleep(60)"
+    ) % Path(__file__).resolve().parent.parent
+    pai = subprocess.Popen([sys.executable, "-c", codigo], stdout=subprocess.PIPE, text=True)
+    filho = int(pai.stdout.readline())
+    pai.kill()  # como o Gerenciador de Tarefas faria
+    pai.wait()
+    time.sleep(2)
+    vivos = subprocess.run(["tasklist", "/FI", f"PID eq {filho}", "/NH"], capture_output=True, text=True).stdout
+    if str(filho) in vivos:
+        subprocess.run(["taskkill", "/F", "/PID", str(filho)])
+    assert str(filho) not in vivos
