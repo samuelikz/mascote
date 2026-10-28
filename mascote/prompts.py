@@ -3,6 +3,7 @@ import re
 import unicodedata
 from datetime import datetime, timedelta
 
+# limites pra contexto de 8192 tokens; ajustar_contexto() reduz pro cérebro em uso (a Gemma na GPU usa 4096)
 LIMITE = 10000  # ~2900 tokens: com a resposta de até 4096, cabe no contexto 8192
 ORCAMENTO = 20000  # caracteres por pedido de chat (~5500 tokens): cabe no contexto 8192 com folga pra resposta
 LIMITE_MEMORIAS = 3000
@@ -48,6 +49,13 @@ PERSONALIDADE = (
 )
 
 
+def ajustar_contexto(tokens: int) -> None:
+    """Escala os limites de texto pro contexto do cérebro em uso (um pet, um cérebro por vez)."""
+    global LIMITE, ORCAMENTO, LIMITE_MEMORIAS
+    f = min(tokens, 8192) / 8192
+    LIMITE, ORCAMENTO, LIMITE_MEMORIAS = int(10000 * f), int(20000 * f), int(3000 * f)
+
+
 def truncar(texto: str) -> str:
     return texto if len(texto) <= LIMITE else texto[:LIMITE] + "…"
 
@@ -64,8 +72,9 @@ def _palavras(texto: str) -> set[str]:
     return set(re.findall(r"[a-zà-ú0-9]{4,}", texto.lower()))
 
 
-def escolher_memorias(memorias: list[str], pergunta: str, limite: int = LIMITE_MEMORIAS) -> list[str]:
+def escolher_memorias(memorias: list[str], pergunta: str, limite: int | None = None) -> list[str]:
     """As que têm palavras em comum com a pergunta primeiro, depois as mais novas; voltam na ordem original."""
+    limite = LIMITE_MEMORIAS if limite is None else limite
     alvo = _palavras(pergunta)
     ordem = sorted(range(len(memorias)), key=lambda i: (-len(_palavras(memorias[i]) & alvo), -i))
     escolhidas, total = [], 0

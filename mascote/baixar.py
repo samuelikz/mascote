@@ -1,13 +1,14 @@
-"""Obtém a IA embutida (llama.cpp + Gemma 2 9B) na pasta do usuário, conferindo SHA-256.
+"""Obtém a IA embutida (llama.cpp + um modelo: Gemma 2 9B ou Qwen3.5 4B) na pasta do usuário, conferindo SHA-256.
 
 Fonte principal: a release "ia-v1" do repositório do projeto (o GitHub limita 2 GB por arquivo, então o
-modelo vai em 3 partes). Se ela falhar, usa as fontes originais. Se a Gemma já estiver no Ollama, copia de lá.
+modelo vai em partes). Se ela falhar, usa as fontes originais. Se a Gemma já estiver no Ollama, copia de lá.
 """
 import hashlib
 import os
 import zipfile
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
@@ -23,14 +24,45 @@ def _partes(nome: str, total: int) -> list[tuple[str, int]]:
     return [(f"{REPO}/{nome}.{n:03d}", t) for n, t in enumerate(tamanhos, 1)]
 
 
-# Gemma 2 9B (Q4_0): o mesmo arquivo testado com o Mascote
-MODELO_SHA256 = "ff1d1fc78170d787ee1201778e2dd65ea211654ca5fb7d69b5a2e7b123a50373"
-MODELO_TAMANHO = 5_443_143_296
-MODELO_FONTES = [
-    _partes("gemma2-9b.gguf", MODELO_TAMANHO),
-    [(f"https://registry.ollama.ai/v2/library/gemma2/blobs/sha256:{MODELO_SHA256}", MODELO_TAMANHO)],
-]
-BLOB_OLLAMA = Path.home() / ".ollama" / "models" / "blobs" / f"sha256-{MODELO_SHA256}"
+@dataclass(frozen=True)
+class Modelo:
+    nome: str  # como aparece pro usuário
+    arquivo: str
+    sha256: str
+    tamanho: int
+    fontes: list
+    copiar_de: Path | None = None  # mesmo arquivo já baixado pelo Ollama
+    contexto: int = 8192  # tokens; a Gemma 9B com 8192 não cabe numa placa de 8 GB (memória de vídeo esgota)
+
+    @property
+    def gb(self) -> str:
+        return f"{self.tamanho / 1e9:.1f} GB".replace(".", ",")
+
+
+_GEMMA_SHA = "ff1d1fc78170d787ee1201778e2dd65ea211654ca5fb7d69b5a2e7b123a50373"
+_QWEN_SHA = "13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983"
+MODELOS = {
+    # Gemma 2 9B (Q4_0): o mesmo arquivo testado com o Mascote
+    "gemma2": Modelo("Gemma 2 9B", "gemma2-9b.gguf", _GEMMA_SHA, 5_443_143_296, [
+        _partes("gemma2-9b.gguf", 5_443_143_296),
+        [(f"https://registry.ollama.ai/v2/library/gemma2/blobs/sha256:{_GEMMA_SHA}", 5_443_143_296)],
+    ], Path.home() / ".ollama" / "models" / "blobs" / f"sha256-{_GEMMA_SHA}", contexto=4096),
+    # Qwen3.5 4B (Q4_K_M, quantizado pelo bartowski): mais leve, roda em placas com menos memória
+    "qwen35": Modelo("Qwen3.5 4B", "qwen3.5-4b.gguf", _QWEN_SHA, 3_013_027_808, [
+        _partes("qwen3.5-4b.gguf", 3_013_027_808),
+        [("https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/resolve/main/Qwen_Qwen3.5-4B-Q4_K_M.gguf", 3_013_027_808)],
+    ]),
+}
+PADRAO = "gemma2"
+
+
+def modelo(chave: str | None = None) -> Modelo:
+    """O modelo escolhido (no instalador ou no menu), ou o de `chave`."""
+    if chave is None:
+        from .config import preferencias
+
+        chave = preferencias()["Cerebro"]
+    return MODELOS.get(chave, MODELOS[PADRAO])
 
 # llama.cpp b11941, build Vulkan (funciona em placas AMD como a RX 580)
 LLAMA_ZIP = "llama-b11941-bin-win-vulkan-x64.zip"
@@ -52,8 +84,8 @@ def pasta_ia() -> Path:
     return Path(os.environ.get("MASCOTE_IA_DIR") or Path(os.environ["LOCALAPPDATA"]) / identidade())
 
 
-def caminho_modelo() -> Path:
-    return pasta_ia() / "modelo" / "gemma2-9b.gguf"
+def caminho_modelo(chave: str | None = None) -> Path:
+    return pasta_ia() / "modelo" / modelo(chave).arquivo
 
 
 def caminho_llama() -> Path:
@@ -68,8 +100,8 @@ def pronto(arquivo: Path) -> bool:
     return arquivo.is_file() and _marca(arquivo).is_file()
 
 
-def ia_instalada() -> bool:
-    return pronto(caminho_modelo()) and pronto(caminho_llama())
+def ia_instalada(chave: str | None = None) -> bool:
+    return pronto(caminho_modelo(chave)) and pronto(caminho_llama())
 
 
 def baixar_arquivo(
@@ -161,10 +193,11 @@ def instalar_llama(zip_: Path, pasta: Path) -> None:
                 (pasta / nome).write_bytes(z.read(item))
 
 
-def obter_ia(progresso: Progresso, cancelado: Callable[[], bool] = lambda: False) -> None:
+def obter_ia(progresso: Progresso, cancelado: Callable[[], bool] = lambda: False, chave: str | None = None) -> None:
     """Baixa o que faltar (llama.cpp e modelo), com um progresso só somando os dois."""
+    m = modelo(chave)
     falta_llama = not pronto(caminho_llama())
-    total = (LLAMA_TAMANHO if falta_llama else 0) + MODELO_TAMANHO
+    total = (LLAMA_TAMANHO if falta_llama else 0) + m.tamanho
     if falta_llama:
         zip_ = pasta_ia() / "llama" / LLAMA_ZIP
         baixar_arquivo(zip_, LLAMA_FONTES, LLAMA_SHA256, LLAMA_TAMANHO, lambda f, t: progresso(f, total), cancelado)
@@ -173,5 +206,5 @@ def obter_ia(progresso: Progresso, cancelado: Callable[[], bool] = lambda: False
         _marca(zip_).unlink(missing_ok=True)
         _marca(caminho_llama()).write_text(LLAMA_SHA256, encoding="utf-8")
     base = LLAMA_TAMANHO if falta_llama else 0
-    baixar_arquivo(caminho_modelo(), MODELO_FONTES, MODELO_SHA256, MODELO_TAMANHO,
-                   lambda f, t: progresso(base + f, total), cancelado, copiar_de=BLOB_OLLAMA)
+    baixar_arquivo(caminho_modelo(chave), m.fontes, m.sha256, m.tamanho,
+                   lambda f, t: progresso(base + f, total), cancelado, copiar_de=m.copiar_de)

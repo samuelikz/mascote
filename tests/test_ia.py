@@ -96,7 +96,17 @@ def test_criar_ia_conforme_preferencias():
     ia = criar_ia({"IA": "ollama", "ModeloOllama": "dolphin-mistral:latest"})
     assert isinstance(ia, ClienteOllama) and ia.modelo == "dolphin-mistral:latest"
     embutida = criar_ia({"IA": "embutida", "ModeloOllama": "x"})
-    assert isinstance(embutida, ServidorIA) and embutida.modelo == caminho_modelo()
+    assert isinstance(embutida, ServidorIA) and embutida.modelo == caminho_modelo("gemma2")
+    leve = criar_ia({"IA": "embutida", "ModeloOllama": "x", "Cerebro": "qwen35"})
+    assert leve.modelo.name == "qwen3.5-4b.gguf"
+
+
+def test_sem_pensamento_tira_o_raciocinio_do_qwen():
+    from mascote.ia import sem_pensamento
+
+    assert sem_pensamento("<think>\nhmm, o usuário quer...\n</think>\n\noi! 😄") == "oi! 😄"
+    assert sem_pensamento("<think>ainda pensando") == ""  # resposta chegando aos poucos
+    assert sem_pensamento("oi sem pensar") == "oi sem pensar"
 
 
 @pytest.mark.skipif(not _ollama_no_ar(), reason="Ollama não está rodando")

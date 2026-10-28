@@ -1,6 +1,7 @@
 import ctypes
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -12,12 +13,17 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from .baixar import caminho_llama, caminho_modelo
+from .baixar import caminho_llama, caminho_modelo, modelo
 from .config import pasta_dados
 
 
 class ErroIA(Exception):
     pass
+
+
+def sem_pensamento(texto: str) -> str:
+    """Tira o raciocínio que modelos como o Qwen escrevem antes da resposta (mesmo sem fechar a tag)."""
+    return re.sub(r"<think>.*?(</think>|$)\s*", "", texto, flags=re.S).strip() if "<think>" in texto else texto
 
 
 def juntar_fluxo(linhas, pedaco_de, ao_pedaco) -> str:
@@ -67,8 +73,8 @@ _JOB = _job_que_mata_ao_fechar()
 class ServidorIA:
     """llama-server rodando como subprocesso, ligado sob demanda e desligado quando ocioso."""
 
-    def __init__(self, exe: Path, modelo: Path, ocioso_s: int = 300, timeout_s: int = 60):
-        self.exe, self.modelo = Path(exe), Path(modelo)
+    def __init__(self, exe: Path, modelo: Path, ocioso_s: int = 300, timeout_s: int = 60, contexto: int = 4096):
+        self.exe, self.modelo, self.contexto = Path(exe), Path(modelo), contexto
         self.ocioso_s, self.timeout_s = ocioso_s, timeout_s
         self.proc: subprocess.Popen | None = None
         self.porta = 0
@@ -78,8 +84,8 @@ class ServidorIA:
         self.trava = threading.Lock()
 
     @classmethod
-    def padrao(cls, **kw) -> "ServidorIA":
-        return cls(caminho_llama(), caminho_modelo(), **kw)
+    def padrao(cls, cerebro: str | None = None, **kw) -> "ServidorIA":
+        return cls(caminho_llama(), caminho_modelo(cerebro), contexto=modelo(cerebro).contexto, **kw)
 
     def disponivel(self) -> bool:
         return self.exe.is_file() and self.modelo.is_file()
@@ -108,7 +114,7 @@ class ServidorIA:
             self.log.close()
         self.log = open(pasta_dados() / "llama.log", "wb")
         self.proc = subprocess.Popen(
-            [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", "8192"],
+            [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", str(self.contexto)],
             env={**os.environ, "LLAMA_API_KEY": self.senha},  # fora da linha de comando, que outros processos leem
             stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT,  # stdin explícito: exe sem console não tem um
             creationflags=subprocess.CREATE_NO_WINDOW,
@@ -136,7 +142,8 @@ class ServidorIA:
                   esquema: dict | None = None, ao_pedaco=None) -> str:
         with self.trava:
             self.garantir_ligado()
-            pedido = {"messages": mensagens, "max_tokens": max_tokens, "temperature": temperatura, "stream": bool(ao_pedaco)}
+            pedido = {"messages": mensagens, "max_tokens": max_tokens, "temperature": temperatura, "stream": bool(ao_pedaco),
+                      "chat_template_kwargs": {"enable_thinking": False}}  # o Qwen pensaria em voz alta; a Gemma ignora
             if esquema:
                 pedido["response_format"] = {"type": "json_schema", "json_schema": {"name": "resposta", "schema": esquema}}
             corpo = json.dumps(pedido).encode()
@@ -146,6 +153,7 @@ class ServidorIA:
                         resposta = juntar_fluxo(r, lambda o: (o.get("choices") or [{}])[0].get("delta", {}).get("content"), ao_pedaco)
                     else:
                         resposta = json.load(r)["choices"][0]["message"]["content"]
+                    resposta = sem_pensamento(resposta)
             except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError) as e:
                 raise ErroIA(f"falha ao perguntar: {e}") from e
             finally:
@@ -168,6 +176,7 @@ class ClienteOllama:
     """Usa um Ollama já instalado no PC (http://127.0.0.1:11434), com a mesma cara do ServidorIA."""
 
     ligado = False
+    contexto = 8192  # o Ollama tira camadas da GPU sozinho se não couber
 
     def __init__(self, modelo: str, url: str = "http://127.0.0.1:11434", manter: str = "5m"):
         self.modelo, self.url, self.manter = modelo, url, manter
@@ -183,16 +192,18 @@ class ClienteOllama:
                   esquema: dict | None = None, ao_pedaco=None) -> str:
         dados = {
             "model": self.modelo, "messages": mensagens, "stream": bool(ao_pedaco), "keep_alive": self.manter,
-            "options": {"temperature": temperatura, "num_predict": max_tokens, "num_ctx": 8192},
+            "options": {"temperature": temperatura, "num_predict": max_tokens, "num_ctx": self.contexto},
         }
         if esquema:
             dados["format"] = esquema
+        if self.modelo.lower().startswith("qwen"):
+            dados["think"] = False
         pedido = urllib.request.Request(f"{self.url}/api/chat", json.dumps(dados).encode(), {"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(pedido, timeout=180) as r:
                 if ao_pedaco:
-                    return juntar_fluxo(r, lambda o: o.get("message", {}).get("content"), ao_pedaco)
-                return json.load(r)["message"]["content"]
+                    return sem_pensamento(juntar_fluxo(r, lambda o: o.get("message", {}).get("content"), ao_pedaco))
+                return sem_pensamento(json.load(r)["message"]["content"])
         except urllib.error.HTTPError as e:
             raise ErroIA(f"o Ollama recusou ({e.code}): o modelo {self.modelo} está instalado nele?") from e
         except (OSError, ValueError, KeyError) as e:
@@ -208,7 +219,7 @@ class ClienteOllama:
 def criar_ia(prefs: dict) -> "ServidorIA | ClienteOllama":
     if prefs["IA"] == "ollama":
         return ClienteOllama(prefs["ModeloOllama"])
-    return ServidorIA.padrao()
+    return ServidorIA.padrao(prefs.get("Cerebro"))
 
 
 class PonteIA(QObject):

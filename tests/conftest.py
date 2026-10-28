@@ -32,6 +32,15 @@ def sem_janelas_de_verdade(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def limites_de_contexto_padrao():
+    # o App ajusta os limites dos prompts pro cérebro dele; cada teste começa do padrão (8192)
+    from mascote import prompts
+
+    yield
+    prompts.ajustar_contexto(8192)
+
+
+@pytest.fixture(autouse=True)
 def dados_temporarios(tmp_path, monkeypatch):
     monkeypatch.setenv("MASCOTE_DADOS", str(tmp_path / "dados"))
 

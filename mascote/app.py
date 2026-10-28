@@ -8,15 +8,15 @@ from PySide6.QtCore import QFileSystemWatcher, QLocale, QObject, QTimer, Signal
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QSystemTrayIcon
 
-from . import atualizar, claude, config, diario, explorar, memoria
+from . import atualizar, claude, config, diario, explorar, memoria, prompts
 from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
-from .baixar import ia_instalada
-from .ia import ClienteOllama, PonteIA, criar_ia
+from .baixar import MODELOS, ia_instalada, modelo
+from .ia import ClienteOllama, PonteIA, criar_ia, sem_pensamento
 from .janelas import ATALHO, administrador, segundos_ocioso, tela_cheia
 from .pet import ACESSORIOS, CORES, Pet, canto_mais_proximo
 from .prompts import (
-    ESQUEMA_LEMBRETE, LIMITE, conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar,
+    ESQUEMA_LEMBRETE, conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar,
     mensagens_resumir, mensagens_traduzir, parece_portugues, separar_memoria,
 )
 
@@ -53,7 +53,7 @@ def fala(chave: str) -> str:
 
 def ofertas(texto: str) -> list[str]:
     """O que oferecer pro texto copiado: traduzir (frase em outra língua) e/ou resumir (textão). Código e link, nada."""
-    if not 20 <= len(texto) <= LIMITE or len(re.findall(r"[{};=<>]", texto)) > len(texto) / 100:
+    if not 20 <= len(texto) <= prompts.LIMITE or len(re.findall(r"[{};=<>]", texto)) > len(texto) / 100:
         return []
     palavras = len(re.findall(r"[A-Za-zÀ-ú]{2,}", texto))
     acoes = []
@@ -96,9 +96,10 @@ def descrever_quando(quando: datetime, regra: dict | None, agora: datetime) -> s
     return f"toda {', '.join(curtos[:-1])} e {curtos[-1]} às {h}"
 
 
-def parametros(tipo: str) -> tuple[float, int]:
-    """(temperatura, max_tokens): JSON e texto pronto pedem resposta firme; texto pronto precisa de espaço."""
-    return {"lembrar": (0.1, 256), "resultado": (0.3, 4096)}.get(tipo, (0.7, 512))
+def parametros(tipo: str, contexto: int = 8192) -> tuple[float, int]:
+    """(temperatura, max_tokens): JSON e texto pronto pedem resposta firme; texto pronto precisa de espaço
+    (metade do contexto: a outra metade é do texto de entrada)."""
+    return {"lembrar": (0.1, 256), "resultado": (0.3, min(4096, contexto // 2))}.get(tipo, (0.7, 512))
 
 
 def saudacao(agora: datetime, hoje: list[str]) -> str:
@@ -130,6 +131,7 @@ class App(QObject):
         self.agenda = Agenda(config.pasta_dados() / "agenda.db")
         self.prefs = config.preferencias()  # nome e IA escolhidos no instalador
         self.servidor = criar_ia(self.prefs)
+        prompts.ajustar_contexto(self.servidor.contexto)
         self.ia = PonteIA(self.servidor)
         self.pet = Pet(self.cfg["canto"], self.cfg["cor"], self.cfg["acessorio"])
         self.balao = Balao()
@@ -227,7 +229,7 @@ class App(QObject):
     def pedir(self, mensagens: list[dict], etiqueta: tuple) -> None:
         self.pendentes += 1
         self.pet.definir_estado("pensando")
-        temperatura, max_tokens = parametros(etiqueta[0])
+        temperatura, max_tokens = parametros(etiqueta[0], self.servidor.contexto)
         extra = {"esquema": ESQUEMA_LEMBRETE} if etiqueta[0] == "lembrar" else {"fluxo": True} if etiqueta[0] == "chat" else {}
         self.ia.pedir(mensagens, etiqueta, max_tokens=max_tokens, temperatura=temperatura, **extra)
 
@@ -470,7 +472,7 @@ class App(QObject):
             from .baixar_ui import baixar_com_janela
 
             self.balao.fechar()
-            if baixar_com_janela(self.prefs["Nome"]):
+            if baixar_com_janela(self.prefs["Nome"], self.prefs["Cerebro"]):
                 self.pet.definir_estado("feliz", 2000)
                 self.dizer("cérebro instalado! 🧠✨ agora sim, fala comigo")
         elif tipo == "atualizar":
@@ -532,7 +534,7 @@ class App(QObject):
     # ---- respostas da IA ----
     def ia_escrevendo(self, parcial: str, etiqueta: tuple) -> None:
         if etiqueta[0] == "chat" and self.balao.modo == "chat" and self.balao.isVisible():
-            visivel = re.split(r"(?im)^\s*MEMORIA:", parcial)[0].strip()  # a linha de memória não aparece nem pela metade
+            visivel = re.split(r"(?im)^\s*MEMORIA:", sem_pensamento(parcial))[0].strip()  # nem memória nem raciocínio aparecem
             if visivel:
                 self.balao.escrever_rascunho(visivel)
 
@@ -587,7 +589,9 @@ class App(QObject):
         if isinstance(self.servidor, ClienteOllama):
             self.dizer(f"não tô achando o Ollama 🦙 ele tá aberto? ({self.prefs['ModeloOllama']})")
         elif not ia_instalada():
-            self.dizer("meu cérebro ainda não foi baixado 🧠 (5,4 GB)", [("baixar agora ⬇️", ("baixar", None)), ("depois", ("nada", None))])
+            m = modelo(self.prefs["Cerebro"])
+            self.dizer(f"meu cérebro ainda não foi baixado 🧠 ({m.nome}, {m.gb})",
+                       [("baixar agora ⬇️", ("baixar", None)), ("depois", ("nada", None))])
         else:
             self.dizer("ai, minha cabecinha falhou 😵 tenta de novo?")
 
@@ -734,26 +738,38 @@ class App(QObject):
             self.dizer(f"agora eu sou o {self.prefs['Nome']}! 😄")
 
     def escolher_ia(self) -> None:
-        embutida = "IA embutida (Gemma 2 9B)"
+        jeito = {"gemma2": "caprichada", "qwen35": "leve"}
+        embutidas = {f"IA embutida: {m.nome} ({m.gb}, {jeito[c]}{'' if ia_instalada(c) else ', precisa baixar'})": c
+                     for c, m in MODELOS.items()}
         try:
             do_ollama = [f"Ollama: {m}" for m in ClienteOllama(self.prefs["ModeloOllama"]).modelos()]
         except Exception:
             do_ollama = []
-        opcoes = [embutida] + do_ollama
-        atual = embutida if self.prefs["IA"] == "embutida" else f"Ollama: {self.prefs['ModeloOllama']}"
+        opcoes = list(embutidas) + do_ollama
+        if self.prefs["IA"] == "embutida":
+            atual = next(r for r, c in embutidas.items() if c == self.prefs["Cerebro"])
+        else:
+            atual = f"Ollama: {self.prefs['ModeloOllama']}"
         escolha, ok = QInputDialog.getItem(None, self.prefs["Nome"], "Qual cérebro eu uso?" + (
             "" if do_ollama else "\n(não achei o Ollama aberto)"), opcoes, opcoes.index(atual) if atual in opcoes else 0, False)
         if not ok:
             return
-        if escolha == embutida:
-            self.prefs["IA"] = "embutida"
+        if escolha in embutidas:
+            self.prefs["IA"], self.prefs["Cerebro"] = "embutida", embutidas[escolha]
+            config.salvar_preferencia("Cerebro", self.prefs["Cerebro"])
         else:
             self.prefs["IA"], self.prefs["ModeloOllama"] = "ollama", escolha.removeprefix("Ollama: ")
             config.salvar_preferencia("ModeloOllama", self.prefs["ModeloOllama"])
         config.salvar_preferencia("IA", self.prefs["IA"])
         self.servidor.desligar()
         self.servidor = self.ia.servidor = criar_ia(self.prefs)
-        self.dizer("pronto, troquei de cérebro! 🧠")
+        prompts.ajustar_contexto(self.servidor.contexto)
+        if self.prefs["IA"] == "embutida" and not ia_instalada(self.prefs["Cerebro"]):
+            m = modelo(self.prefs["Cerebro"])
+            self.dizer(f"troquei! mas o {m.nome} ainda não foi baixado ({m.gb}) 🧠",
+                       [("baixar agora ⬇️", ("baixar", None)), ("depois", ("nada", None))], ms=None)
+        else:
+            self.dizer("pronto, troquei de cérebro! 🧠")
 
     # ---- atualizações ----
     def verificar_atualizacao(self, pedido: bool = True) -> None:

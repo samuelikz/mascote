@@ -55,3 +55,9 @@ def test_saudacao_e_filtro_de_traducao():
     assert ofertas(textao) == ["resumir"]
     assert ofertas("we shipped everything on time and the team is happy with it now " * 10) == ["traduzir", "resumir"]
     assert sem_emoji("eba! ✅ bora 🍔") == "eba!  bora"
+
+
+def test_resposta_pronta_nunca_passa_da_metade_do_contexto():
+    from mascote.app import parametros
+
+    assert parametros("resultado", 4096)[1] == 2048 and parametros("resultado", 8192)[1] == 4096
