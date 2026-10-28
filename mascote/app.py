@@ -12,7 +12,7 @@ from .ia import PonteIA, ServidorIA
 from .janelas import segundos_ocioso, tela_cheia
 from .pet import Pet
 from .prompts import (
-    ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar, mensagens_traduzir, separar_memoria, truncar,
+    conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar, mensagens_traduzir, separar_memoria, truncar,
 )
 
 DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
@@ -53,10 +53,10 @@ def descrever_quando(quando: datetime, regra: dict | None, agora: datetime) -> s
 
 
 def ajustar_quando(quando: datetime, regra: dict | None, agora: datetime) -> datetime | None:
-    """Horário no passado: com repetição vai pra próxima vez; sem repetição, melhor perguntar de novo."""
-    if quando > agora - timedelta(minutes=1):
-        return quando
-    return proximo_disparo(quando, regra, agora) if regra else None
+    """Com repetição, a regra manda (só a hora de `quando` vale). Sem repetição, horário no passado = perguntar de novo."""
+    if regra:
+        return proximo_disparo(quando, regra, agora - timedelta(minutes=1))
+    return quando if quando > agora - timedelta(minutes=1) else None
 
 
 class App(QObject):
@@ -105,7 +105,9 @@ class App(QObject):
 
     def pedir(self, mensagens: list[dict], etiqueta: tuple) -> None:
         self.pet.definir_estado("pensando")
-        self.ia.pedir(mensagens, etiqueta)
+        # JSON e texto pronto precisam de resposta firme; conversa pode variar
+        temperatura = {"lembrar": 0.1, "resultado": 0.3}.get(etiqueta[0], 0.7)
+        self.ia.pedir(mensagens, etiqueta, temperatura=temperatura)
 
     # ---- relógio ----
     def checar(self) -> None:
@@ -209,6 +211,7 @@ class App(QObject):
             self.dizer("não entendi 😅 tenta pelo chat? tipo \"me lembra de X amanhã às 9h\"")
             return
         texto, quando, regra = lido
+        quando, regra = conferir_extracao(original, quando, regra)
         quando = ajustar_quando(quando, regra, agora) if quando else None
         if quando is None:
             self.esperando_quando = texto

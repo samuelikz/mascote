@@ -33,3 +33,10 @@ def test_quando_no_passado_vira_futuro_ou_pergunta():
     assert ajustar_quando(datetime(2026, 10, 27, 9), None, agora) is None
     assert ajustar_quando(datetime(2026, 10, 27, 9), {"tipo": "diario"}, agora) == datetime(2026, 10, 28, 9)
     assert ajustar_quando(datetime(2026, 10, 28, 9), None, agora) == datetime(2026, 10, 28, 9)
+
+
+def test_repetido_comeca_no_primeiro_dia_valido_da_regra():
+    from mascote.app import ajustar_quando
+
+    agora = datetime(2026, 10, 27, 22, 0)  # terça
+    assert ajustar_quando(datetime(2026, 10, 28, 9), {"tipo": "semanal", "dias": [4]}, agora) == datetime(2026, 10, 30, 9)

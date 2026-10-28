@@ -79,10 +79,10 @@ class ServidorIA:
         self.desligar()
         raise ErroIA("o servidor de IA demorou demais pra ligar")
 
-    def perguntar(self, mensagens: list[dict], max_tokens: int = 512) -> str:
+    def perguntar(self, mensagens: list[dict], max_tokens: int = 512, temperatura: float = 0.7) -> str:
         with self.trava:
             self.garantir_ligado()
-            corpo = json.dumps({"messages": mensagens, "max_tokens": max_tokens, "temperature": 0.7}).encode()
+            corpo = json.dumps({"messages": mensagens, "max_tokens": max_tokens, "temperature": temperatura}).encode()
             try:
                 with urllib.request.urlopen(self._pedido("/v1/chat/completions", corpo), timeout=180) as r:
                     resposta = json.load(r)["choices"][0]["message"]["content"]
@@ -114,10 +114,10 @@ class PonteIA(QObject):
         super().__init__()
         self.servidor = servidor
 
-    def pedir(self, mensagens: list[dict], etiqueta: object, max_tokens: int = 512) -> None:
+    def pedir(self, mensagens: list[dict], etiqueta: object, max_tokens: int = 512, temperatura: float = 0.7) -> None:
         def trabalho():
             try:
-                self.pronto.emit(self.servidor.perguntar(mensagens, max_tokens), etiqueta)
+                self.pronto.emit(self.servidor.perguntar(mensagens, max_tokens, temperatura), etiqueta)
             except ErroIA as e:
                 self.falhou.emit(str(e), etiqueta)
 

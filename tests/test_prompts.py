@@ -41,3 +41,43 @@ def test_chat_historico_longo_comeca_em_user():
 
 def test_separar_memoria():
     assert separar_memoria("Prazer, Samuel! 😄\nMEMORIA: nome é Samuel") == ("Prazer, Samuel! 😄", ["nome é Samuel"])
+
+
+def test_extracao_dias_por_nome():
+    r = '{"texto":"academia","quando":"2026-10-28T07:00","repete":{"tipo":"semanal","dias":["seg","Qua","sexta-feira"]}}'
+    assert ler_extracao(r)[2] == {"tipo": "semanal", "dias": [0, 2, 4]}
+    r = '{"texto":"feira","quando":"2026-10-31T08:00","repete":{"tipo":"semanal","dias":["sáb","dom"]}}'
+    assert ler_extracao(r)[2] == {"tipo": "semanal", "dias": [5, 6]}
+
+
+def test_conferir_extracao_descarta_data_e_repeticao_inventadas():
+    from mascote.prompts import conferir_extracao
+
+    quando, regra = datetime(2026, 11, 6, 9), {"tipo": "semanal", "dias": [3]}
+    assert conferir_extracao("ligar pro dentista", quando, regra) == (None, None)
+    assert conferir_extracao("ligar pro dentista sexta", quando, regra) == (quando, None)
+    assert conferir_extracao("academia toda segunda às 7h", quando, regra) == (quando, regra)
+    assert conferir_extracao("tomar remédio todo dia 8h", quando, {"tipo": "diario"}) == (quando, {"tipo": "diario"})
+    assert conferir_extracao("beber água daqui 2 minutos", quando, None) == (quando, None)
+    assert conferir_extracao("reunião amanhã", quando, None) == (quando, None)
+    assert conferir_extracao("pagar boleto 28/10", quando, None) == (quando, None)
+
+
+def test_traducao_decide_a_lingua_no_codigo():
+    from mascote.prompts import mensagens_traduzir, parece_portugues
+
+    assert parece_portugues("oi tudo bem queria saber se vc pode mandar o relatorio")
+    assert parece_portugues("Não sei se você vai conseguir")
+    assert not parece_portugues("Hi team, the deploy was moved to Thursday because of the database migration.")
+    assert not parece_portugues("Hola, ¿cómo estás? Quiero saber si puedes venir mañana.")
+    assert "para inglês" in mensagens_traduzir("oi, tudo bem com você?")[0]["content"]
+    assert "para português" in mensagens_traduzir("Hi team, how are you?")[0]["content"]
+
+
+def test_extrair_traz_calendario_dos_proximos_dias():
+    conteudo = mensagens_extrair("sexta às 15h", AGORA)[0]["content"]  # AGORA = terça 27/10
+    assert "sexta-feira 30/10" in conteudo and "quarta-feira 28/10" in conteudo
+
+
+def test_extracao_tira_me_lembra_do_texto():
+    assert ler_extracao('{"texto":"Me lembra de ir na academia","quando":null}')[0] == "ir na academia"
