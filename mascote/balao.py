@@ -1,5 +1,5 @@
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
     QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
@@ -15,8 +15,13 @@ QPushButton:hover { background: #d4efdd; }
 QPushButton#x { border: none; background: transparent; color: #a33; padding: 0 4px; }
 QLineEdit { font: 10pt "Segoe UI"; border: 1px solid #ccc; border-radius: 9px; padding: 4px 8px; color: #222; background: white; }
 QScrollArea, QScrollArea > QWidget > QWidget { border: none; background: white; }
+QScrollBar:vertical { width: 8px; background: #f0f0f0; border-radius: 4px; margin: 0; }
+QScrollBar::handle:vertical { background: #8fd3a8; border-radius: 4px; min-height: 24px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
-LARGURA_MAX = 320
+LARGURA_MAX = 380
+LARGURA_TEXTO = LARGURA_MAX - 24
+FONTE = QFont("Segoe UI", 10)
 
 
 class Balao(QWidget):
@@ -61,7 +66,10 @@ class Balao(QWidget):
 
     def _texto(self, texto: str, nome: str = "", selecionavel: bool = False) -> QLabel:
         rotulo = QLabel(texto, objectName=nome, wordWrap=True, textFormat=Qt.PlainText)
-        rotulo.setMaximumWidth(LARGURA_MAX - 24)
+        rotulo.setMaximumWidth(LARGURA_TEXTO)
+        # sem largura mínima, o Qt espreme texto quebrável numa coluna estreita
+        natural = max((QFontMetrics(FONTE).horizontalAdvance(l) for l in texto.splitlines() or [""]), default=0) + 20
+        rotulo.setMinimumWidth(min(natural, LARGURA_TEXTO))
         if selecionavel:
             rotulo.setTextInteractionFlags(Qt.TextSelectableByMouse)
         return rotulo
@@ -75,6 +83,20 @@ class Balao(QWidget):
             linha.addWidget(b)
         linha.addStretch()
         return linha
+
+    def _altura_maxima(self) -> int:
+        tela = QGuiApplication.screenAt(self.pet_geo.center()) if not self.pet_geo.isNull() else None
+        return int((tela or QGuiApplication.primaryScreen()).availableGeometry().height() * 0.6)
+
+    def _ajustar_rolagem(self, rolagem: QScrollArea, minimo: int) -> None:
+        """O balão cresce até caber o texto (até 60% da tela); só passa disso é que aparece a rolagem."""
+        conteudo = rolagem.widget()
+        conteudo.ensurePolished()  # aplica o estilo (fonte 10pt) antes de medir
+        largura = rolagem.width() - 12 if rolagem.width() > 50 else LARGURA_TEXTO - 12
+        precisa = conteudo.heightForWidth(largura) if conteudo.hasHeightForWidth() else -1
+        if precisa < 0:
+            precisa = conteudo.sizeHint().height()
+        rolagem.setFixedHeight(max(minimo, min(precisa + 4, self._altura_maxima())))
 
     def _mostrar(self, ativar: bool = False) -> None:
         self.cartao.adjustSize()
@@ -98,10 +120,12 @@ class Balao(QWidget):
     def mostrar_resultado(self, texto: str) -> None:
         self._limpar("resultado")
         rolagem = QScrollArea(widgetResizable=True)
-        rolagem.setWidget(self._texto(texto, selecionavel=True))
-        rolagem.setMaximumHeight(260)
-        rolagem.setMinimumWidth(LARGURA_MAX - 24)
+        rotulo = self._texto(texto, selecionavel=True)
+        rotulo.setMinimumWidth(LARGURA_TEXTO - 12)
+        rolagem.setWidget(rotulo)
+        rolagem.setFixedWidth(LARGURA_TEXTO)
         self.corpo.addWidget(rolagem)
+        self._ajustar_rolagem(rolagem, 40)
         linha = QHBoxLayout()
         copiar = QPushButton("copiar 📋", cursor=Qt.PointingHandCursor)
         copiar.clicked.connect(lambda: (QGuiApplication.clipboard().setText(texto), copiar.setText("copiado! ✅")))
@@ -121,7 +145,7 @@ class Balao(QWidget):
         self.chat_lista.addStretch()
         self.chat_rolagem = QScrollArea(widgetResizable=True)
         self.chat_rolagem.setWidget(conteudo)
-        self.chat_rolagem.setFixedSize(LARGURA_MAX - 24, 220)
+        self.chat_rolagem.setFixedWidth(LARGURA_TEXTO)
         self.corpo.addWidget(self.chat_rolagem)
         self.entrada = QLineEdit(placeholderText="fala comigo… (Esc fecha)")
         self.entrada.returnPressed.connect(self._enviar)
@@ -138,7 +162,8 @@ class Balao(QWidget):
         if self.chat_lista is None:
             return
         rotulo = self._texto(texto, "eu" if papel == "user" else "pet", selecionavel=True)
-        rotulo.setMaximumWidth(LARGURA_MAX - 70)
+        rotulo.setMaximumWidth(LARGURA_TEXTO - 60)
+        rotulo.setMinimumWidth(min(rotulo.minimumWidth(), LARGURA_TEXTO - 60))
         linha = QHBoxLayout()
         if papel == "user":
             linha.addStretch()
@@ -146,6 +171,9 @@ class Balao(QWidget):
         if papel != "user":
             linha.addStretch()
         self.chat_lista.addLayout(linha)
+        self._ajustar_rolagem(self.chat_rolagem, 160)
+        if self.isVisible():
+            self._mostrar()  # cresceu: reposiciona pra não sair da tela
         QTimer.singleShot(30, lambda: self.chat_rolagem and self.chat_rolagem.verticalScrollBar().setValue(10**6))
 
     def _enviar(self) -> None:

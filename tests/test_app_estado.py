@@ -101,3 +101,15 @@ def test_app_usa_nome_e_ia_das_preferencias(monkeypatch):
     assert "Ollama" in m.balao.findChildren(QLabel)[-1].text()
     m.balao.close()
     m.pet.close()
+
+
+def test_engolir_so_come_e_avisa(mascote):
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.comeu("um textão qualquer")
+    assert any(b.text().startswith("engolir") for b in mascote.balao.findChildren(QPushButton))
+    lembretes, memorias = len(mascote.agenda.listar()), len(modulo_app.memoria.listar())
+    mascote.escolheu(("comida", "engolir"))
+    assert "engoli todo o texto" in mascote.balao.findChildren(QLabel)[-1].text()
+    assert (len(mascote.agenda.listar()), len(modulo_app.memoria.listar())) == (lembretes, memorias)

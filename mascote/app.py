@@ -159,6 +159,7 @@ class App(QObject):
         self.dizer("Nhac! 😋 o que eu faço com isso?", [
             ("lembrar 📌", ("comida", "lembrar")), ("guardar 🧠", ("comida", "guardar")),
             ("melhorar ✨", ("comida", "melhorar")), ("traduzir 🌎", ("comida", "traduzir")),
+            ("engolir 😋", ("comida", "engolir")),
         ])
 
     def escolheu(self, valor: tuple) -> None:
@@ -185,6 +186,9 @@ class App(QObject):
             self.dizer("tá bom, te chamo em 10 min ⏰", ms=3000)
         elif dado == "lembrar":
             self.pedir(mensagens_extrair(self.comida, agora), ("lembrar", self.comida))
+        elif dado == "engolir":  # só comer, sem guardar nada
+            self.pet.definir_estado("feliz", 2000)
+            self.dizer("engoli todo o texto! 😋")
         elif dado == "guardar":
             memoria.adicionar(self.comida.strip()[:LIMITE_MEMORIA])
             self.pet.definir_estado("feliz", 2000)
