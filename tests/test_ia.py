@@ -33,3 +33,19 @@ def test_gemma_de_verdade_responde_e_desliga():
     assert resposta.strip()
     s.desligar_se_ocioso(time.time() + 1)
     assert not s.ligado
+
+
+@pytest.mark.skipif(not ServidorIA.padrao().disponivel(), reason="recursos/ ausente")
+def test_servidor_recusa_pedido_sem_senha():
+    import urllib.error
+    import urllib.request
+
+    s = ServidorIA.padrao()
+    try:
+        s.garantir_ligado()
+        pedido = urllib.request.Request(s._url("/v1/models"))
+        with pytest.raises(urllib.error.HTTPError) as erro:
+            urllib.request.urlopen(pedido, timeout=5)
+        assert erro.value.code == 401
+    finally:
+        s.desligar()

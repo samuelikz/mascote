@@ -1,4 +1,5 @@
 import json
+import secrets
 import socket
 import subprocess
 import threading
@@ -25,6 +26,7 @@ class ServidorIA:
         self.proc: subprocess.Popen | None = None
         self.porta = 0
         self.ultimo_uso = 0.0
+        self.senha = ""
         self.trava = threading.Lock()
 
     @classmethod
@@ -41,6 +43,10 @@ class ServidorIA:
     def _url(self, caminho: str) -> str:
         return f"http://127.0.0.1:{self.porta}{caminho}"
 
+    def _pedido(self, caminho: str, corpo: bytes | None = None) -> urllib.request.Request:
+        return urllib.request.Request(
+            self._url(caminho), corpo, {"Content-Type": "application/json", "Authorization": f"Bearer {self.senha}"})
+
     def garantir_ligado(self) -> None:
         if self.ligado:
             return
@@ -49,8 +55,9 @@ class ServidorIA:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             self.porta = s.getsockname()[1]
+        self.senha = secrets.token_urlsafe(24)  # só este processo conversa com o servidor
         self.proc = subprocess.Popen(
-            [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", "4096"],
+            [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", "4096", "--api-key", self.senha],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
         )
         limite = time.time() + self.timeout_s
@@ -59,8 +66,9 @@ class ServidorIA:
                 self.proc = None
                 raise ErroIA("o servidor de IA fechou sozinho")
             try:
-                with urllib.request.urlopen(self._url("/health"), timeout=2) as r:
-                    if r.status == 200:
+                # /v1/models exige a senha: só responde 200 se for o nosso servidor e o modelo já carregou
+                with urllib.request.urlopen(self._pedido("/v1/models"), timeout=2) as r:
+                    if r.status == 200 and self.ligado:
                         self.ultimo_uso = time.time()
                         return
             except (urllib.error.URLError, OSError):
@@ -73,9 +81,8 @@ class ServidorIA:
         with self.trava:
             self.garantir_ligado()
             corpo = json.dumps({"messages": mensagens, "max_tokens": max_tokens, "temperature": 0.7}).encode()
-            pedido = urllib.request.Request(self._url("/v1/chat/completions"), corpo, {"Content-Type": "application/json"})
             try:
-                with urllib.request.urlopen(pedido, timeout=180) as r:
+                with urllib.request.urlopen(self._pedido("/v1/chat/completions", corpo), timeout=180) as r:
                     resposta = json.load(r)["choices"][0]["message"]["content"]
             except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError) as e:
                 raise ErroIA(f"falha ao perguntar: {e}") from e
