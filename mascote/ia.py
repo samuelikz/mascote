@@ -1,4 +1,5 @@
 import json
+import os
 import secrets
 import socket
 import subprocess
@@ -57,7 +58,8 @@ class ServidorIA:
             self.porta = s.getsockname()[1]
         self.senha = secrets.token_urlsafe(24)  # só este processo conversa com o servidor
         self.proc = subprocess.Popen(
-            [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", "4096", "--api-key", self.senha],
+            [str(self.exe), "-m", str(self.modelo), "--host", "127.0.0.1", "--port", str(self.porta), "-ngl", "99", "-c", "4096"],
+            env={**os.environ, "LLAMA_API_KEY": self.senha},  # fora da linha de comando, que outros processos leem
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
         )
         limite = time.time() + self.timeout_s
@@ -99,6 +101,7 @@ class ServidorIA:
             self.proc.kill()
             self.proc.wait()
             self.proc = None
+            self.senha, self.porta = "", 0
 
 
 class PonteIA(QObject):
