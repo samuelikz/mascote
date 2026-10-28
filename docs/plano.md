@@ -27,11 +27,11 @@
 
 ## Review Focus
 
-1. **Gemma devolve JSON com cercas ```json, texto antes/depois ou JSON quebrado** → extração ainda funciona ou cai em "pra quando? 🤔", nunca exceção. Teste na Tarefa 3.
-2. **Repetição mensal no dia 31 (ou 29–31 em fevereiro)** → dispara no último dia do mês. Teste na Tarefa 2.
-3. **PC desligado por dias com lembrete diário** → ao abrir, dispara **uma** vez e o próximo vai pro futuro, não uma enxurrada. Teste na Tarefa 2.
-4. **`llama-server` não sobe (exe/modelo ausente, porta ocupada, Vulkan falha)** → erro em ≤ 60 s, pet faz cara triste com mensagem, app segue vivo. Teste na Tarefa 4.
-5. **Texto arrastado gigante (ex.: 50 mil caracteres)** → truncado a 6000 caracteres antes de ir pro modelo (contexto 4096). Teste na Tarefa 3.
+1. **Gemma devolve JSON com cercas ```json, texto antes/depois ou JSON quebrado** → extração ainda funciona ou cai em "pra quando? 🤔", nunca exceção. Teste na Task 3.
+2. **Repetição mensal no dia 31 (ou 29–31 em fevereiro)** → dispara no último dia do mês. Teste na Task 2.
+3. **PC desligado por dias com lembrete diário** → ao abrir, dispara **uma** vez e o próximo vai pro futuro, não uma enxurrada. Teste na Task 2.
+4. **`llama-server` não sobe (exe/modelo ausente, porta ocupada, Vulkan falha)** → erro em ≤ 60 s, pet faz cara triste com mensagem, app segue vivo. Teste na Task 4.
+5. **Texto arrastado gigante (ex.: 50 mil caracteres)** → truncado a 6000 caracteres antes de ir pro modelo (contexto 4096). Teste na Task 3.
 
 ---
 
@@ -60,7 +60,7 @@ mascote/
 
 ---
 
-### Tarefa 1: Projeto, config e memórias
+### Task 1: Projeto, config e memórias
 
 **Files:**
 - Create: `mascote/__init__.py`, `mascote/config.py`, `mascote/memoria.py`, `requirements.txt`, `requirements-dev.txt`, `.gitignore`
@@ -103,7 +103,7 @@ def test_memoria_adiciona_lista_apaga_e_ignora_duplicata():
 
 ---
 
-### Tarefa 2: Agenda de lembretes
+### Task 2: Agenda de lembretes
 
 **Files:**
 - Create: `mascote/agenda.py`
@@ -169,7 +169,7 @@ def test_garantir_almoco_idempotente(tmp_path):
 
 ---
 
-### Tarefa 3: Prompts e interpretação das respostas
+### Task 3: Prompts e interpretação das respostas
 
 **Files:**
 - Create: `mascote/prompts.py`
@@ -223,7 +223,7 @@ def test_separar_memoria():
 
 ---
 
-### Tarefa 4: Recursos e servidor de IA
+### Task 4: Recursos e servidor de IA
 
 **Files:**
 - Create: `ferramentas/preparar_recursos.ps1`, `mascote/ia.py`
@@ -273,7 +273,7 @@ def test_gemma_de_verdade_responde_e_desliga():
 
 ---
 
-### Tarefa 5: Sinais do Windows
+### Task 5: Sinais do Windows
 
 **Files:**
 - Create: `mascote/janelas.py`
@@ -296,7 +296,7 @@ def test_sinais_retornam_tipos_certos():
 
 ---
 
-### Tarefa 6: A bolinha (widget do pet)
+### Task 6: A bolinha (widget do pet)
 
 **Files:**
 - Create: `mascote/pet.py`
@@ -334,7 +334,7 @@ def test_canto_mais_proximo():
 
 ---
 
-### Tarefa 7: O balão
+### Task 7: O balão
 
 **Files:**
 - Create: `mascote/balao.py`
@@ -355,7 +355,7 @@ def test_canto_mais_proximo():
 
 ---
 
-### Tarefa 8: Juntando tudo
+### Task 8: Juntando tudo
 
 **Files:**
 - Create: `mascote/app.py`, `mascote/__main__.py`
@@ -403,7 +403,7 @@ def test_fala_do_almoco_e_lembrete():
 
 ---
 
-### Tarefa 9: Instalador
+### Task 9: Instalador
 
 **Files:**
 - Create: `build.ps1`, `instalador/mascote.iss`, `instalador/icone.ico`
