@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Instalador MSI por usuário (sem admin). Telas: boas-vindas → nome → IA → instalar.
+  Instalador MSI por máquina (pede administrador; instala em Program Files). Dados, memórias e IA baixada
+  ficam na pasta do usuário (%LOCALAPPDATA%\Mascote). Telas: boas-vindas → nome → IA → instalar.
   Abrir o .msi de novo (ou Configurações → Aplicativos → Modificar) mostra Alterar / Reparar / Remover.
   A IA embutida (llama.cpp + Gemma) é baixada durante a instalação pelo próprio Mascote.exe, da release "ia-v1"
   do GitHub do projeto: o MSI fica só com o app (um arquivo de 5,4 GB nem caberia num MSI).
@@ -16,7 +17,7 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package Name="$(var.Produto)" Manufacturer="Samuel" Version="$(var.Versao)" Language="1046" Codepage="65001"
-           UpgradeCode="$(var.Upgrade)" Scope="perUser">
+           UpgradeCode="$(var.Upgrade)" Scope="perMachine">
     <MajorUpgrade DowngradeErrorMessage="Já existe uma versão mais nova do Mascote instalada." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
@@ -52,10 +53,8 @@
     <SetProperty Id="PASTA_MODELO" Value="[LocalAppDataFolder]$(var.Chave)\modelo\" Before="CostInitialize" Sequence="both" />
     <SetProperty Id="PASTA_LLAMA" Value="[LocalAppDataFolder]$(var.Chave)\llama\" Before="CostInitialize" Sequence="both" />
 
-    <StandardDirectory Id="LocalAppDataFolder">
-      <Directory Id="ProgramasDir" Name="Programs">
-        <Directory Id="INSTALLFOLDER" Name="$(var.Chave)" />
-      </Directory>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="$(var.Chave)" />
     </StandardDirectory>
 
     <Feature Id="Principal" Title="Mascote" AllowAbsent="no" Display="hidden">
