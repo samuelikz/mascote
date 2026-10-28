@@ -214,3 +214,25 @@ def test_atalho_come_o_que_foi_copiado_e_resumir_vira_resultado(mascote, monkeyp
 def test_falas_variam_mas_sao_todas_conhecidas():
     vistas = {modulo_app.fala("feito") for _ in range(200)}
     assert len(vistas) > 1 and vistas <= set(modulo_app.FALAS["feito"])
+
+
+def test_explorar_escolhe_um_lugar_e_o_balao_abre_perto_de_onde_ele_esta(mascote, monkeypatch):
+    from PySide6.QtCore import QPoint, QRect
+
+    from mascote import explorar
+
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.pet.show()
+    r = QRect(100, 300, 900, 500)
+    monkeypatch.setattr(explorar, "lugares", lambda *a: [(QPoint(150, 300), 9)])
+    monkeypatch.setattr(explorar, "moldura", lambda hwnd: r)
+    mascote.pet.moldura = explorar.moldura
+    monkeypatch.setattr(modulo_app.random, "random", lambda: 0.9)  # não volta pra casa
+    mascote.explorar()
+    assert mascote.pet.viagem is not None and mascote.pet.viagem[5] == (9, 50)
+    mascote.pet.viagem = None
+    mascote.pet.sentado = (9, 50)
+    mascote.pet.move(150, 300 - int(mascote.pet.pe().y()))
+    mascote.abrir_chat()
+    assert mascote.pet.pos() == QPoint(150, 300 - int(mascote.pet.pe().y()))  # não teleporta pra casa
+    assert mascote.balao.isVisible()

@@ -51,6 +51,7 @@ class Pet(QWidget):
     comeu = Signal(str)
     mudou_canto = Signal(str)
     carinho = Signal()
+    moveu = Signal()  # saiu do lugar sem ser arrastado (seguindo a janela onde senta, ou chegou num lugar novo)
     atalho = Signal()  # Ctrl+Alt+M apertado em qualquer programa
 
     def __init__(self, canto: str = "inf_dir", cor: str = "verde", acessorio: str = "nenhum"):
@@ -76,6 +77,12 @@ class Pet(QWidget):
         self.carinho_viradas: list[float] = []
         self.coracoes_ate = 0.0
         self.atalho_ok = False
+        # exploração: viagem = (início, origem, destino, duração, altura do arco, onde senta ao chegar)
+        self.viagem: tuple | None = None
+        self.sentado: tuple[int, int] | None = None  # (janela, distância da borda esquerda dela)
+        self.moldura = lambda hwnd: None  # o app diz onde está cada janela (ou None se sumiu)
+        self.janela_embaixo = lambda ponto: None  # o app diz se tem janela pra sentar onde ele foi solto
+        self.ultimo_seguir = 0.0
         self.vestir(cor, acessorio)
         self.encaixar()
         self.relogio = QTimer(self, interval=33, timeout=self.passo)
@@ -102,8 +109,69 @@ class Pet(QWidget):
         if visivel:
             self.show()  # mudar a flag esconde a janela
 
+    def em_casa(self) -> bool:
+        return self.viagem is None and self.sentado is None and self.pos() == posicao_do_canto(self.canto, self.area(), self.size())
+
+    def ir_para(self, chao: QPoint, sentar_em: tuple[int, int] | None = None, arco: float | None = None) -> None:
+        """Pula em arco até `chao` (onde o pé encosta, em coordenadas da tela)."""
+        self.passeio = None
+        self.sentado = None
+        origem = QPointF(self.pos())
+        destino = QPointF(chao.x(), chao.y() - self.pe().y())
+        distancia = math.hypot(destino.x() - origem.x(), destino.y() - origem.y())
+        if distancia < 2:
+            self.sentado = sentar_em
+            return
+        duracao = min(1.8, 0.45 + distancia / 900)
+        arco = min(140, 30 + distancia * 0.25) if arco is None else arco
+        self.viagem = (time.time(), origem, destino, duracao, arco, sentar_em)
+
+    def voltar_pra_casa(self) -> None:
+        casa = posicao_do_canto(self.canto, self.area(), self.size())
+        self.ir_para(QPoint(casa.x(), casa.y() + int(self.pe().y())))
+
+    def cair(self) -> None:
+        """A janela onde estava sentado sumiu: cai reto até o chão e depois volta pra casa."""
+        self.sentado = None
+        chao = self.area().bottom() - 4
+        self.ir_para(QPoint(self.x(), chao), sentar_em=(0, 0), arco=0)  # janela 0 = chão
+
+    def _viajar(self, agora: float) -> None:
+        inicio, origem, destino, duracao, arco, sentar_em = self.viagem
+        t = min(1.0, (agora - inicio) / duracao)
+        if arco == 0:
+            t_pos = t * t  # caindo: acelera
+        else:
+            t_pos = t
+        x = origem.x() + (destino.x() - origem.x()) * t_pos
+        y = origem.y() + (destino.y() - origem.y()) * t_pos - arco * math.sin(math.pi * t)
+        self.move(round(x), round(y))
+        if t >= 1:
+            self.viagem = None
+            self.pular()  # aterrissagem com quique
+            if sentar_em and sentar_em[0] == 0:  # caiu no chão
+                QTimer.singleShot(1200, lambda: self.viagem is None and self.sentado is None and self.voltar_pra_casa())
+            else:
+                self.sentado = sentar_em
+            self.moveu.emit()
+
+    def _seguir_janela(self, agora: float) -> None:
+        if agora - self.ultimo_seguir < 0.25:
+            return
+        self.ultimo_seguir = agora
+        hwnd, dx = self.sentado
+        r = self.moldura(hwnd)
+        if r is None or r.top() - self.area().top() < 100:  # fechou, minimizou ou maximizou: sem lugar pra sentar
+            self.cair()
+            return
+        x = max(r.left(), min(r.left() + dx, r.right() - self.width()))
+        destino = QPoint(x, r.top() - int(self.pe().y()))
+        if destino != self.pos():
+            self.move(destino)
+            self.moveu.emit()
+
     def passear(self) -> None:
-        if self.estado == "parado" and self.arraste is None and self.passeio is None:
+        if self.estado == "parado" and self.arraste is None and self.passeio is None and self.em_casa():
             para_dentro = -1 if self.canto.endswith("dir") else 1
             self.passeio = (time.time(), para_dentro * random.uniform(80, 220))
 
@@ -147,9 +215,16 @@ class Pet(QWidget):
             self.voltar()
         if self.passeio is not None:
             self._andar(agora)
+        if self.viagem is not None:
+            self._viajar(agora)
+        elif self.sentado is not None and self.sentado[0]:
+            self._seguir_janela(agora)
         mouse = QPointF(self.mapFromGlobal(QCursor.pos()))
         b = self.pe()
         alvos = [pupila(QPointF(b.x() + ox, b.y() + oy), mouse, 3.2) for ox, oy in OLHOS]
+        if self.viagem is not None:  # olha pra onde está pulando
+            indo = self.viagem[2] - self.viagem[1]
+            alvos = [QPointF(math.copysign(3, indo.x()) if abs(indo.x()) > 5 else 0, 2 if indo.y() > 0 else -2)] * 2
         if self.passeio is not None:  # olha pra onde está andando
             indo = math.cos(math.pi * (agora - self.passeio[0]) / PASSEIO_S) * self.passeio[1]
             alvos = [QPointF(math.copysign(3, indo), 0.5)] * 2
@@ -187,6 +262,8 @@ class Pet(QWidget):
 
     def _corpo(self, agora: float) -> tuple[float, float, float]:
         """(deslocamento y, escala x, escala y) com respiração e squash & stretch do pulo."""
+        if self.viagem is not None:  # no ar: esticadinho
+            return 0, 0.9, 1.1
         p = (agora - self.pulo_inicio) / 0.5
         if 0 <= p <= 1:
             altura = 22 if self.estado != "chamando" else 16
@@ -223,6 +300,12 @@ class Pet(QWidget):
         corpo.cubicTo(meia, -ALTURA * 0.08, meia * 0.6, 0, 0, 0)
         corpo.cubicTo(-meia * 0.6, 0, -meia, -ALTURA * 0.08, -meia, -ALTURA * 0.38)
         corpo.cubicTo(-meia, ponta * 0.55, -meia * 0.25, ponta * 0.8, 0, ponta)
+        if self.sentado is not None and self.sentado[0]:  # pezinhos balançando pra fora da beirada
+            p.setPen(QPen(self.cor_borda, 1.5))
+            p.setBrush(self.cor)
+            for i, ox in enumerate((-13, 13)):
+                balanço = 3 * math.sin(agora * 3 + i * math.pi)
+                p.drawEllipse(QPointF(ox + balanço, 5), 6, 4.5)
         p.setPen(QPen(self.cor_borda, 2))
         p.setBrush(self.cor)
         p.drawPath(corpo)
@@ -385,6 +468,7 @@ class Pet(QWidget):
     # ---- mouse ----
     def mousePressEvent(self, ev):
         self.parar_passeio()
+        self.viagem = None  # pegou no ar: para onde está
         if ev.button() == Qt.LeftButton:
             self.arraste = ev.globalPosition().toPoint() - self.pos()
             self.arrastou = False
@@ -396,6 +480,7 @@ class Pet(QWidget):
             destino = ev.globalPosition().toPoint() - self.arraste
             if self.arrastou or (destino - self.pos()).manhattanLength() > 5:
                 self.arrastou = True
+                self.sentado = None
                 self.move(destino)
 
     def mouseReleaseEvent(self, ev):
@@ -407,6 +492,13 @@ class Pet(QWidget):
             self.clicado.emit()
             return
         self.arrastou = False
+        pe = self.mapToGlobal(self.pe().toPoint())
+        embaixo = self.janela_embaixo(pe)
+        if embaixo is not None:  # solto em cima de uma janela: senta nela
+            hwnd, r = embaixo
+            x = max(r.left(), min(self.x(), r.right() - self.width()))
+            self.ir_para(QPoint(x, r.top()), sentar_em=(hwnd, x - r.left()))
+            return
         self.canto = canto_mais_proximo(self.geometry().center(), self.area())
         self.encaixar()
         self.pular()  # quiquinho ao cair no canto

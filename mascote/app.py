@@ -8,13 +8,13 @@ from PySide6.QtCore import QFileSystemWatcher, QLocale, QObject, QTimer, Signal
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QSystemTrayIcon
 
-from . import atualizar, claude, config, memoria
+from . import atualizar, claude, config, explorar, memoria
 from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
 from .baixar import ia_instalada
 from .ia import ClienteOllama, PonteIA, criar_ia
 from .janelas import ATALHO, administrador, segundos_ocioso, tela_cheia
-from .pet import ACESSORIOS, CORES, Pet
+from .pet import ACESSORIOS, CORES, Pet, canto_mais_proximo
 from .prompts import (
     ESQUEMA_LEMBRETE, LIMITE, conferir_extracao, ler_extracao, mensagens_chat, mensagens_extrair, mensagens_melhorar,
     mensagens_resumir, mensagens_traduzir, parece_portugues, separar_memoria,
@@ -30,7 +30,9 @@ OPCOES = {  # liga/desliga do menu Ajustes: chave no config.json, rótulo
     "iniciativa": "Puxar conversa sozinho 💬",
     "voz": "Falar em voz alta 🔊",
     "area_transferencia": "Oferecer tradução do que eu copiar 📋",
+    "explorar": "Explorar a tela (sentar em janelas e ícones) 🐾",
 }
+FOLGA_EM_CIMA = 110  # espaço que o corpo precisa acima do lugar onde senta
 
 
 FALAS = {  # várias versões de cada frase, pra ele não soar repetido
@@ -157,6 +159,9 @@ class App(QObject):
         self.pet.comeu.connect(self.comeu)
         self.pet.mudou_canto.connect(self.mudou_canto)
         self.pet.carinho.connect(self.ganhou_carinho)
+        self.pet.moveu.connect(lambda: self.balao.isVisible() and self.posicionar_balao())
+        self.pet.moldura = explorar.moldura
+        self.pet.janela_embaixo = lambda pe: explorar.janela_embaixo(pe, self.pet.width()) if self.cfg["explorar"] else None
         self.pet.atalho.connect(self.atalho_comida)
         self.ultimo_carinho = 0.0
         self.balao.escolheu.connect(self.escolheu)
@@ -187,7 +192,10 @@ class App(QObject):
     # ---- fala ----
     def posicionar_balao(self) -> None:
         self.pet.parar_passeio()  # o balão gruda no canto: o pet volta pra lá antes
-        self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+        geo = self.pet.frameGeometry()
+        # longe de casa, o balão abre pro lado que tem espaço
+        canto = self.pet.canto if self.pet.em_casa() else canto_mais_proximo(geo.center(), self.pet.area())
+        self.balao.posicionar(geo, canto)
 
     def livre(self) -> bool:
         """Nada na tela esperando o usuário: dá pra puxar assunto ou passear."""
@@ -271,8 +279,32 @@ class App(QObject):
             self.ativo_desde = time.time()
         if self.cfg["iniciativa"] and self.livre():
             self.puxar_assunto(agora)
-        if self.livre() and self.pet.estado == "parado" and random.random() < 0.12:
-            self.pet.passear()  # de vez em quando dá uma voltinha pela borda (~a cada 3 min)
+        parado_de_vez = self.pet.viagem is None and self.pet.passeio is None
+        if self.livre() and self.pet.estado == "parado" and parado_de_vez:
+            if self.cfg["explorar"] and random.random() < 0.18:
+                self.explorar()  # ~a cada 2 min muda de lugar
+            elif random.random() < 0.12:
+                self.pet.passear()  # de vez em quando dá uma voltinha pela borda (~a cada 3 min)
+        if not self.cfg["explorar"] and parado_de_vez and not self.pet.em_casa():
+            self.pet.voltar_pra_casa()
+
+    def explorar(self) -> None:
+        if not self.pet.em_casa() and random.random() < 0.3:
+            self.pet.voltar_pra_casa()
+            return
+        try:
+            opcoes = explorar.lugares(self.pet.width(), self.pet.area(), FOLGA_EM_CIMA)
+        except OSError:
+            opcoes = []
+        if not opcoes:
+            if not self.pet.em_casa():
+                self.pet.voltar_pra_casa()
+            return
+        chao, hwnd = random.choice(opcoes)
+        janela = explorar.moldura(hwnd) if hwnd else None
+        if hwnd and janela is None:
+            return  # a janela fechou bem agora
+        self.pet.ir_para(chao, sentar_em=(hwnd, chao.x() - janela.left()) if hwnd else None)
 
     def puxar_assunto(self, agora: datetime) -> None:
         if self.cfg["bom_dia"] != agora.date().isoformat():

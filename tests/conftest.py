@@ -23,6 +23,15 @@ def fechar_qt_antes_de_sair():
 
 
 @pytest.fixture(autouse=True)
+def sem_janelas_de_verdade(monkeypatch):
+    # o pet explorando não pode pular pras janelas reais de quem roda os testes
+    from mascote import explorar
+
+    monkeypatch.setattr(explorar, "lugares", lambda *a, **kw: [])
+    monkeypatch.setattr(explorar, "janela_embaixo", lambda *a, **kw: None)
+
+
+@pytest.fixture(autouse=True)
 def dados_temporarios(tmp_path, monkeypatch):
     monkeypatch.setenv("MASCOTE_DADOS", str(tmp_path / "dados"))
 
