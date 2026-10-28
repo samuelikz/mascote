@@ -113,3 +113,33 @@ def test_engolir_so_come_e_avisa(mascote):
     mascote.escolheu(("comida", "engolir"))
     assert "engoli todo o texto" in mascote.balao.findChildren(QLabel)[-1].text()
     assert (len(mascote.agenda.listar()), len(modulo_app.memoria.listar())) == (lembretes, memorias)
+
+
+def test_fica_pensando_ate_a_ultima_resposta_e_volta_a_chamar(mascote, monkeypatch):
+    monkeypatch.setattr(mascote.ia, "pedir", lambda *a, **kw: None)
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.abrir_chat()
+    mascote.enviou("oi")
+    mascote.enviou("tudo bem?")
+    mascote.ia_respondeu("oiê!", ("chat",))
+    assert mascote.pet.estado == "pensando"
+    mascote.agenda.adicionar("beber água", datetime.now() - timedelta(minutes=1))
+    mascote.checar()  # lembrete chega enquanto pensa
+    mascote.ia_respondeu("tudo!", ("chat",))
+    assert mascote.pet.estado == "chamando"
+    mascote.ia_falhou("erro", ("chat",))
+    mascote.pet.estado_ate = 0.1  # a cara triste acabou
+    mascote.pet.passo()
+    assert mascote.pet.estado == "chamando"
+
+
+def test_resposta_do_chat_reabre_o_balao_se_fechou(mascote, monkeypatch):
+    monkeypatch.setattr(mascote.ia, "pedir", lambda *a, **kw: None)
+    mascote.agenda.apagar(mascote.agenda.listar()[0].id)
+    mascote.abrir_chat()
+    mascote.enviou("oi")
+    mascote.balao.fechar()
+    mascote.ia_respondeu("oiê! 😄", ("chat",))
+    assert mascote.balao.modo == "chat" and mascote.balao.isVisible()
+    mascote.conversa_nova()
+    assert mascote.historico == []

@@ -103,6 +103,9 @@ class Balao(QWidget):
         self.adjustSize()
         self.posicionar(self.pet_geo, self.canto)
         self.show()
+        # no Windows o layout só fecha o tamanho final depois do show: reposiciona de novo
+        self.posicionar(self.pet_geo, self.canto)
+        QTimer.singleShot(0, lambda: self.posicionar(self.pet_geo, self.canto))
         self.raise_()
         if ativar:
             self.activateWindow()
@@ -221,11 +224,20 @@ class Balao(QWidget):
             return
         tela = QGuiApplication.screenAt(pet_geo.center()) or QGuiApplication.primaryScreen()
         area = tela.availableGeometry()
+        dica = self.sizeHint()
+        if dica.width() > self.width() or dica.height() > self.height():
+            self.resize(dica.expandedTo(self.size()))
         x = pet_geo.right() - self.width() if canto.endswith("dir") else pet_geo.left()
         y = pet_geo.top() - self.height() + 18 if canto.startswith("inf") else pet_geo.bottom() - 10
         x = max(area.left(), min(x, area.right() - self.width()))
         y = max(area.top(), min(y, area.bottom() - self.height()))
-        self.move(x, y)
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if self.isVisible():
+            self.posicionar(self.pet_geo, self.canto)  # cresceu depois de aberto: puxa de volta pra dentro da tela
 
 
 def _apagar_layout(layout) -> None:

@@ -61,6 +61,8 @@ Root: HKCU; Subkey: "Software\{#Chave}"; ValueType: string; ValueName: "Iniciar"
 ; baixa (ou copia do Ollama) o modelo; se falhar, o pet oferece depois
 Filename: "{app}\Mascote.exe"; Parameters: "--baixar-modelo"; StatusMsg: "Baixando a IA..."; Flags: runasoriginaluser waituntilterminated; Check: IAEmbutida
 Filename: "{app}\Mascote.exe"; Description: "Abrir o {#Produto} agora"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; atualização pelo próprio pet (modo silencioso): reabre sozinho no fim
+Filename: "{app}\Mascote.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Mascote.exe /T"; Flags: runhidden; RunOnceId: "fechar"
@@ -122,7 +124,9 @@ end;
 function InitializeSetup: Boolean;
 begin
   Result := True;
-  Instalado := RegKeyExists(HKLM, DESINSTALAR);
+  { o AppId tem '{{' escapado: sem ExpandConstant a chave procurada nunca existe }
+  Instalado := RegKeyExists(HKLM, ExpandConstant(DESINSTALAR)) or
+    FileExists(ExpandConstant('{autopf}\{#Chave}\unins000.exe'));
   { as versões antigas brigariam pelos atalhos e pela pasta }
   if FileExists(ExpandConstant('{localappdata}\Mascote\unins000.exe')) then begin
     MsgBox('Encontrei a versão antiga do Mascote. Desinstale ela primeiro (Configurações → Aplicativos → Mascote → Desinstalar). Suas memórias e lembretes ficam guardados.', mbError, MB_OK);
@@ -207,7 +211,7 @@ var
 begin
   Result := True;
   if (CurPageID = PaginaManutencao.ID) and (PaginaManutencao.SelectedValueIndex = 2) then begin
-    if RegQueryStringValue(HKLM, DESINSTALAR, 'UninstallString', Desinstalador) then
+    if RegQueryStringValue(HKLM, ExpandConstant(DESINSTALAR), 'UninstallString', Desinstalador) then
       Exec(RemoveQuotes(Desinstalador), '', '', SW_SHOW, ewWaitUntilTerminated, Codigo);
     Fechando := True;
     WizardForm.Close;

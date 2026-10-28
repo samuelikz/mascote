@@ -52,6 +52,7 @@ class Pet(QWidget):
         self.setFixedSize(120, 120)
         self.canto = canto
         self.estado: Estado = "parado"
+        self.base: Estado = "parado"  # para onde volta quando um estado com tempo acaba (o app põe "chamando" no lembrete)
         self.estado_ate: float | None = None
         self.pulo_inicio = -10.0
         self.ultimo_pulo = -10.0
@@ -72,7 +73,7 @@ class Pet(QWidget):
     def encaixar(self) -> None:
         self.move(posicao_do_canto(self.canto, self.area(), self.size()))
 
-    def base(self) -> QPointF:
+    def pe(self) -> QPointF:
         """Meio da base do corpo, em coordenadas do widget."""
         return QPointF(self.width() / 2, self.height() - 14)
 
@@ -84,15 +85,26 @@ class Pet(QWidget):
             self.pulo_inicio = time.time()
         self.update()
 
+    def voltar(self) -> None:
+        self.definir_estado(self.base)
+
+    def pular(self) -> None:
+        self.pulo_inicio = time.time()
+
     def passo(self) -> None:
+        if not self.isVisible():
+            return  # escondido (tela cheia): nem calcula nem redesenha
         agora = time.time()
         if self.estado_ate and agora >= self.estado_ate:
-            self.definir_estado("parado")
+            self.voltar()
         mouse = QPointF(self.mapFromGlobal(QCursor.pos()))
-        b = self.base()
-        self.olhar = [pupila(QPointF(b.x() + ox, b.y() + oy), mouse, 3.2) for ox, oy in OLHOS]
+        b = self.pe()
+        alvos = [pupila(QPointF(b.x() + ox, b.y() + oy), mouse, 3.2) for ox, oy in OLHOS]
+        self.olhar = [o * 0.65 + a * 0.35 for o, a in zip(self.olhar, alvos)]  # olhos deslizam em vez de pular
         perto = math.hypot(mouse.x() - b.x(), mouse.y() - (b.y() - ALTURA / 2)) < 150
-        if self.estado == "parado" and perto and agora - self.ultimo_pulo > 4 and not self.arraste:
+        if self.estado == "cochilo" and perto:
+            self.definir_estado("feliz", 1200)  # acordou com o mouse chegando: pulinho de bom dia
+        elif self.estado == "parado" and perto and agora - self.ultimo_pulo > 4 and not self.arraste:
             self.ultimo_pulo = self.pulo_inicio = agora
         if self.estado == "chamando" and agora - self.pulo_inicio > 0.9:
             self.pulo_inicio = agora
@@ -118,7 +130,7 @@ class Pet(QWidget):
     def paintEvent(self, _):
         agora = time.time()
         dy, sx, sy = self._corpo(agora)
-        b = self.base()
+        b = self.pe()
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
@@ -129,29 +141,34 @@ class Pet(QWidget):
 
         p.translate(b.x(), b.y() + dy)
         p.scale(sx, sy)
-        corpo = QPainterPath()
-        corpo.moveTo(-LARGURA / 2, -6)
-        corpo.cubicTo(-LARGURA / 2, -ALTURA * 1.25, LARGURA / 2, -ALTURA * 1.25, LARGURA / 2, -6)
-        corpo.quadTo(LARGURA / 2, 0, LARGURA / 2 - 8, 0)
-        corpo.lineTo(-LARGURA / 2 + 8, 0)
-        corpo.quadTo(-LARGURA / 2, 0, -LARGURA / 2, -6)
+        # formato de gota: ponta em cima, barriga redonda embaixo
+        meia, ponta = LARGURA / 2, -ALTURA * 1.25
+        corpo = QPainterPath(QPointF(0, ponta))
+        corpo.cubicTo(meia * 0.25, ponta * 0.8, meia, ponta * 0.55, meia, -ALTURA * 0.38)
+        corpo.cubicTo(meia, -ALTURA * 0.08, meia * 0.6, 0, 0, 0)
+        corpo.cubicTo(-meia * 0.6, 0, -meia, -ALTURA * 0.08, -meia, -ALTURA * 0.38)
+        corpo.cubicTo(-meia, ponta * 0.55, -meia * 0.25, ponta * 0.8, 0, ponta)
         p.setPen(QPen(COR_BORDA, 2))
         p.setBrush(COR)
         p.drawPath(corpo)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(255, 255, 255, 70))
-        p.drawEllipse(QPointF(-18, -50), 8, 5)
+        p.drawEllipse(QPointF(-17, -48), 5, 8)  # brilho
         p.setBrush(QColor(255, 140, 150, 90))
         for ox in (-25, 25):
             p.drawEllipse(QPointF(ox, -24), 6, 3.5)
 
-        self._olhos(p, agora)
-        self._boca(p)
-        self._extras(p, agora)
+        e = self.rosto()
+        self._olhos(p, agora, e)
+        self._boca(p, e)
+        self._extras(p, agora, e)
         p.end()
 
-    def _olhos(self, p: QPainter, agora: float) -> None:
-        e = self.estado
+    def rosto(self) -> Estado:
+        """Careta desenhada: igual ao estado, menos quando está sendo arrastado (cara de "uou!")."""
+        return "boca" if self.arraste is not None and self.arrastou else self.estado
+
+    def _olhos(self, p: QPainter, agora: float, e: Estado) -> None:
         tinta = QPen(TINTA, 2.4, Qt.SolidLine, Qt.RoundCap)
         for i, (ox, oy) in enumerate(OLHOS):
             c = QPointF(ox, oy)
@@ -177,8 +194,7 @@ class Pet(QWidget):
                 inclina = -4 if ox < 0 else 4
                 p.drawLine(QPointF(ox - 6, oy - 10 - inclina / 2), QPointF(ox + 6, oy - 10 + inclina / 2))
 
-    def _boca(self, p: QPainter) -> None:
-        e = self.estado
+    def _boca(self, p: QPainter, e: Estado) -> None:
         p.setPen(QPen(TINTA, 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         p.setBrush(Qt.NoBrush)
         y = -22
@@ -209,8 +225,7 @@ class Pet(QWidget):
         else:
             p.drawArc(QRectF(-5, y - 4, 10, 7), 200 * 16, 140 * 16)
 
-    def _extras(self, p: QPainter, agora: float) -> None:
-        e = self.estado
+    def _extras(self, p: QPainter, agora: float, e: Estado) -> None:
         p.setPen(TINTA)
         if e == "cochilo":
             f = QFont("Segoe UI", 9, QFont.Bold)
@@ -225,12 +240,20 @@ class Pet(QWidget):
                 if int(agora * 3) % 4 > i:
                     p.drawEllipse(QPointF(22 + i * 7, -66), 2, 2)
         elif e == "fome":
+            t = (agora % 2) / 2  # a gota escorre e some a cada 2 s
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor("#7cc6ff"))
-            gota = QPainterPath(QPointF(30, -52))
-            gota.quadTo(36, -42, 30, -40)
-            gota.quadTo(24, -42, 30, -52)
+            p.setBrush(QColor(124, 198, 255, int(255 * (1 - t))))
+            y = 12 * t
+            gota = QPainterPath(QPointF(30, -52 + y))
+            gota.quadTo(36, -42 + y, 30, -40 + y)
+            gota.quadTo(24, -42 + y, 30, -52 + y)
             p.drawPath(gota)
+        elif e == "feliz":
+            p.setPen(QPen(QColor("#f5b800"), 1.8, Qt.SolidLine, Qt.RoundCap))
+            for i, (x, y) in enumerate([(-34, -66), (36, -60), (28, -82)]):
+                r = 2 + 2.5 * abs(math.sin(agora * 5 + i * 2))  # brilhinhos piscando em volta
+                p.drawLine(QPointF(x - r, y), QPointF(x + r, y))
+                p.drawLine(QPointF(x, y - r), QPointF(x, y + r))
 
     # ---- mouse ----
     def mousePressEvent(self, ev):
@@ -252,10 +275,13 @@ class Pet(QWidget):
             return
         self.arraste = None
         if not self.arrastou:
+            self.pular()
             self.clicado.emit()
             return
+        self.arrastou = False
         self.canto = canto_mais_proximo(self.geometry().center(), self.area())
         self.encaixar()
+        self.pular()  # quiquinho ao cair no canto
         self.mudou_canto.emit(self.canto)
 
     # ---- comida ----
@@ -266,12 +292,12 @@ class Pet(QWidget):
 
     def dragLeaveEvent(self, _):
         if self.estado == "boca":
-            self.definir_estado("parado")
+            self.voltar()
 
     def dropEvent(self, ev):
         texto = ev.mimeData().text().strip()
         ev.acceptProposedAction()
-        self.definir_estado("parado")
+        self.voltar()
         if texto:
             self.comeu.emit(texto)
 

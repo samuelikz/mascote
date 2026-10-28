@@ -1,11 +1,12 @@
 import re
+import threading
 import time
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu
 
-from . import config, memoria
+from . import atualizar, config, memoria
 from .agenda import Agenda, Lembrete, proximo_disparo
 from .balao import Balao
 from .baixar import ia_instalada
@@ -67,6 +68,8 @@ def ajustar_quando(quando: datetime, regra: dict | None, agora: datetime) -> dat
 
 
 class App(QObject):
+    achou_atualizacao = Signal(object, bool)  # (Atualizacao | None | str de erro, foi pedido no menu)
+
     def __init__(self):
         super().__init__()
         self.cfg = config.carregar()
@@ -83,6 +86,7 @@ class App(QObject):
         self.comida = ""
         self.esperando_quando = ""  # texto de um lembrete que ainda não tem horário
         self.lembrete_na_tela: int | None = None
+        self.pendentes = 0  # pedidos na fila da IA: fica "pensando" até o último voltar
         self.relogio = QTimer(self, interval=20_000, timeout=self.checar)
 
         self.ia.pronto.connect(self.ia_respondeu)
@@ -95,6 +99,7 @@ class App(QObject):
         self.balao.enviou.connect(self.enviou)
         self.balao.apagar.connect(self.apagar)
         self.balao.fechou.connect(self.balao_fechou)
+        self.achou_atualizacao.connect(self.mostrar_atualizacao)
         QApplication.instance().aboutToQuit.connect(lambda: self.servidor.desligar())
 
     def iniciar(self) -> None:
@@ -103,6 +108,7 @@ class App(QObject):
         self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
         self.relogio.start()
         QTimer.singleShot(1500, self.checar)
+        QTimer.singleShot(60_000, lambda: self.verificar_atualizacao(pedido=False))  # confere sozinho ao abrir
 
     # ---- fala ----
     def dizer(self, texto: str, botoes: list | None = None, ms: int | None = 6000) -> None:
@@ -113,9 +119,24 @@ class App(QObject):
         self.balao.falar(texto, botoes or [], ms)
 
     def pedir(self, mensagens: list[dict], etiqueta: tuple) -> None:
+        self.pendentes += 1
         self.pet.definir_estado("pensando")
         temperatura, max_tokens = parametros(etiqueta[0])
         self.ia.pedir(mensagens, etiqueta, max_tokens=max_tokens, temperatura=temperatura)
+
+    def _terminou_pedido(self) -> None:
+        self.pendentes = max(0, self.pendentes - 1)
+        if self.pendentes:
+            self.pet.definir_estado("pensando")
+        else:
+            self.pet.voltar()
+
+    def _mostrar_lembrete(self, id: int | None) -> None:
+        """Lembrete na tela deixa o pet chamando até ser respondido, mesmo depois de outras caretas."""
+        self.lembrete_na_tela = id
+        self.pet.base = "parado" if id is None else "chamando"
+        if self.pet.estado in ("parado", "chamando"):
+            self.pet.voltar()
 
     def balao_fechou(self) -> None:
         self.esperando_quando = ""  # fechou o chat: desistiu do "pra quando?"
@@ -132,13 +153,12 @@ class App(QObject):
             self.pet.show()
         if self.lembrete_na_tela is not None and not (self.balao.isVisible() and self.balao.modo == "lembrete"):
             # algo tampou o balão (comida, menu, tela cheia): o lembrete continua vencido e volta agora
-            self.lembrete_na_tela = None
-            self.pet.definir_estado("parado")
+            self._mostrar_lembrete(None)
         if self.lembrete_na_tela is None:
             vencidos = self.agenda.vencidos(agora)
             if vencidos:
                 l = vencidos[0]
-                self.lembrete_na_tela = l.id
+                self._mostrar_lembrete(l.id)
                 self.pet.definir_estado("chamando")
                 self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
                 self.balao.falar(escolher_fala_lembrete(l), [("feito ✅", ("feito", l.id)), ("depois ⏰", ("adiar", l.id))],
@@ -174,15 +194,20 @@ class App(QObject):
             if baixar_com_janela(self.prefs["Nome"]):
                 self.pet.definir_estado("feliz", 2000)
                 self.dizer("cérebro instalado! 🧠✨ agora sim, fala comigo")
+        elif tipo == "atualizar":
+            from .atualizar_ui import atualizar_com_janela
+
+            self.balao.fechar()
+            if atualizar_com_janela(self.prefs["Nome"], dado):
+                self.dizer("instalando a atualização… já volto! 🔄", ms=None)
         elif tipo == "feito":
             self.agenda.feito(dado, agora)
-            self.lembrete_na_tela = None
+            self._mostrar_lembrete(None)
             self.pet.definir_estado("feliz", 2000)
             self.dizer("eba! ✅")
         elif tipo == "adiar":
             self.agenda.adiar(dado, agora)
-            self.lembrete_na_tela = None
-            self.pet.definir_estado("parado")
+            self._mostrar_lembrete(None)
             self.dizer("tá bom, te chamo em 10 min ⏰", ms=3000)
         elif dado == "lembrar":
             self.pedir(mensagens_extrair(self.comida, agora), ("lembrar", self.comida))
@@ -219,14 +244,19 @@ class App(QObject):
 
     # ---- respostas da IA ----
     def ia_respondeu(self, resposta: str, etiqueta: tuple) -> None:
-        self.pet.definir_estado("parado")
+        self._terminou_pedido()
         tipo = etiqueta[0]
         if tipo == "chat":
             texto, fatos = separar_memoria(resposta)
             for f in fatos:
                 memoria.adicionar(f)
             self.historico.append({"role": "assistant", "content": texto})
-            self.balao.acrescentar_chat("assistant", texto)
+            if self.balao.modo == "chat" and self.balao.isVisible():
+                self.balao.acrescentar_chat("assistant", texto)
+            elif self.lembrete_na_tela is None:
+                # fechou o chat enquanto eu pensava: reabre com a resposta, sem roubar o foco
+                self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
+                self.balao.abrir_chat(self.historico, ativar=False)
         elif tipo == "resultado":
             self.balao.posicionar(self.pet.frameGeometry(), self.pet.canto)
             self.balao.mostrar_resultado(resposta.strip())
@@ -257,6 +287,7 @@ class App(QObject):
 
     def ia_falhou(self, erro: str, etiqueta: tuple) -> None:
         print("IA falhou:", erro)
+        self._terminou_pedido()
         self.pet.definir_estado("triste", 4000)
         if isinstance(self.servidor, ClienteOllama):
             self.dizer(f"não tô achando o Ollama 🦙 ele tá aberto? ({self.prefs['ModeloOllama']})")
@@ -267,15 +298,32 @@ class App(QObject):
 
     # ---- menu ----
     def menu(self, pos) -> None:
+        lembretes, memorias = len(self.agenda.listar()), len(memoria.listar())
         m = QMenu()
-        m.addAction("Ver lembretes", self.ver_lembretes)
-        m.addAction("O que eu lembro de você", self.ver_memorias)
-        m.addAction("Horário do almoço…", self.mudar_almoco)
-        m.addAction("Mudar meu nome…", self.mudar_nome)
-        m.addAction("Modelo da IA…", self.escolher_ia)
+        m.addAction("Conversar 💬", self.abrir_chat)
+        if self.historico:
+            m.addAction("Começar conversa nova 🧹", self.conversa_nova)
         m.addSeparator()
-        m.addAction("Sair", QApplication.quit)
+        m.addAction(f"Ver lembretes ⏰ ({lembretes})", self.ver_lembretes)
+        m.addAction(f"O que eu lembro de você 🧠 ({memorias})", self.ver_memorias)
+        m.addSeparator()
+        ajustes = m.addMenu("Ajustes ⚙️")
+        ajustes.addAction(f"Horário do almoço ({self.cfg['almoco']})…", self.mudar_almoco)
+        ajustes.addAction(f"Meu nome ({self.prefs['Nome']})…", self.mudar_nome)
+        ajustes.addAction("Modelo da IA…", self.escolher_ia)
+        m.addAction(f"Verificar atualizações (v{atualizar.VERSAO})", self.verificar_atualizacao)
+        m.addSeparator()
+        m.addAction("Sair 👋", QApplication.quit)
         m.exec(pos)
+
+    def conversa_nova(self) -> None:
+        self.historico.clear()
+        self.esperando_quando = ""
+        self.pet.definir_estado("feliz", 1500)
+        if self.balao.modo == "chat" and self.balao.isVisible():
+            self.abrir_chat()
+        else:
+            self.dizer("pronto, esqueci a conversa! 🧹 (as memórias continuam)", ms=3000)
 
     def ver_lembretes(self) -> None:
         agora = datetime.now()
@@ -337,6 +385,33 @@ class App(QObject):
         self.servidor.desligar()
         self.servidor = self.ia.servidor = criar_ia(self.prefs)
         self.dizer("pronto, troquei de cérebro! 🧠")
+
+    # ---- atualizações ----
+    def verificar_atualizacao(self, pedido: bool = True) -> None:
+        if pedido:
+            self.dizer("vou dar uma olhada se tem versão nova… 🔎", ms=4000)
+
+        def trabalho():
+            try:
+                r = atualizar.verificar()
+            except Exception as e:
+                r = str(e) or "sem conexão"
+            self.achou_atualizacao.emit(r, pedido)
+
+        threading.Thread(target=trabalho, daemon=True).start()
+
+    def mostrar_atualizacao(self, r, pedido: bool) -> None:
+        if isinstance(r, atualizar.Atualizacao):
+            if not pedido and self.cfg.get("ignorar_versao") == r.versao:
+                return
+            self.dizer(f"saiu a versão {r.versao} do {self.prefs['Nome']}! 🎉 quer atualizar agora?",
+                       [("atualizar ⬇️", ("atualizar", r)), ("agora não", ("nada", None))], ms=None)
+            self.cfg["ignorar_versao"] = r.versao  # sozinho, só avisa uma vez por versão
+            config.salvar(self.cfg)
+        elif pedido and r is None:
+            self.dizer(f"já estou na versão mais nova (v{atualizar.VERSAO}) ✅")
+        elif pedido:
+            self.dizer(f"não consegui ver as atualizações agora 😕 ({r})")
 
     def mudou_canto(self, canto: str) -> None:
         self.cfg["canto"] = canto
